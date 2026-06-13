@@ -49,19 +49,19 @@ node test-server.js
 
 ## What's implemented (Phase 1–3)
 
-- ✅ Express + Socket.io signaling server
-- ✅ Room management (2-peer max, role assignment)
-- ✅ Offer / answer / ICE relay
-- ✅ Graceful disconnect handling
-- ✅ FileReader chunking with bufferedAmount back-pressure
-- ✅ Blob reassembly + auto-download trigger
-- ✅ Real-time progress
+- Express + Socket.io signaling server
+- Room management (2-peer max, role assignment)
+- Offer / answer / ICE relay
+- Graceful disconnect handling
+- FileReader chunking with bufferedAmount back-pressure
+- Blob reassembly + auto-download trigger
+- Real-time progress
 - ngrok for tunnelling
 - AES-GCM encryption (Web Crypto API, key in URL hash)
 - Per-chunk SHA-256 verification
 - OPFS / streaming writes for large files (>500 MB)
 - Connection churn recovery with chunk index resume
-- - transfer through firewalls using websocket relays as fallback
+- Transfer through firewalls using websocket relays as fallback
 
 ## What comes next (Phase 4–5)
 

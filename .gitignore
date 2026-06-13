@@ -1,0 +1,18 @@
+# Dependency directories
+node_modules/
+
+# Production build directories
+dist/
+build/
+
+# Environment variables
+.env
+.env.*
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS Generated Files
+.DS_Store
+Thumbs.db

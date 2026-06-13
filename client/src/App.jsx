@@ -319,9 +319,12 @@ export default function App() {
         addLog("P2P connection established ✓", "ok");
       }
       if (pc.iceConnectionState === "disconnected" || pc.iceConnectionState === "failed") {
-        setTransferState(p => p.phase === "done" ? p : { ...p, phase: "interrupted" });
         if (pc.iceConnectionState === "failed") {
-          addLog("ICE connection failed — Network blocked pure P2P", "err");
+          addLog("ICE connection failed — Network blocked pure P2P. Automatically falling back to Relay Mode.", "err");
+          // Automatically fallback!
+          handleManualReconnect(true);
+        } else {
+          setTransferState(p => p.phase === "done" ? p : { ...p, phase: "interrupted" });
         }
       }
     };
@@ -329,7 +332,11 @@ export default function App() {
     pc.onconnectionstatechange = () => {
       addLog(`Connection: ${pc.connectionState}`, "info");
       if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
-        setTransferState(p => p.phase === "done" ? p : { ...p, phase: "interrupted" });
+        if (pc.connectionState === "failed") {
+          handleManualReconnect(true);
+        } else {
+          setTransferState(p => p.phase === "done" ? p : { ...p, phase: "interrupted" });
+        }
       }
     };
 

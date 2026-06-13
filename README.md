@@ -2,7 +2,8 @@
 
 Direct browser-to-browser file transfer, within same device.
 
-UPDATE 1 -- implemented ngrok tunnelling to allow for interdevice, inter network transfer. However, doesnt work if the network firewall blocks p2p
+UPDATE 1 -- implemented ngrok tunnelling to allow for interdevice, inter network transfer. However, doesnt work if the network firewall blocks p2p.
+UPDATE 2 -- large file transfer enabled with direct to disk writing using OPFS, and routed it to downloads folder. Added pausability and auto reconnection. Also improved UI and removed misleading keys.
 
 ## Project structure
 
@@ -54,11 +55,15 @@ node test-server.js
 - ✅ FileReader chunking with bufferedAmount back-pressure
 - ✅ Blob reassembly + auto-download trigger
 - ✅ Real-time progress
-
-## What comes next (Phase 4–5)
 - ngrok for tunnelling
-- AWS for standing full time deployment
 - AES-GCM encryption (Web Crypto API, key in URL hash)
 - Per-chunk SHA-256 verification
 - OPFS / streaming writes for large files (>500 MB)
 - Connection churn recovery with chunk index resume
+
+## What comes next (Phase 4–5)
+
+- AWS for standing full time deployment
+- transfer through firewalls using fallback
+- deployment containerization
+

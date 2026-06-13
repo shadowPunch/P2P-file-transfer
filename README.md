@@ -8,6 +8,8 @@ UPDATE 2 -- large file transfer enabled with direct to disk writing using OPFS, 
 
 UPDATE 3 -- fallback with websocket relays to get around firewalls restricting p2p.
 
+UPDATE 4 -- packaged application using electron.
+
 ## Project structure
 
 ```
@@ -69,4 +71,4 @@ node test-server.js
 
 - AWS for standing full time deployment
 
-- deployment containerization
+- direct in browser usage to allow for usage across devices, including a mobile phone. currently works only in desktop env

@@ -78,6 +78,7 @@ export default function App() {
   const lastRxChunkRef = useRef(-1);    // last received chunk index (for resume)
   const roleRef        = useRef(null);  // mirrors `role` state for closures
   const roomIdRef      = useRef(null);  // mirrors `roomId` state for closures
+  const pendingCandidatesRef = useRef([]); // Queues ICE candidates received before remote description is set
 
   // ── Speed meter ──
   const speedTimerRef  = useRef(null);
@@ -161,6 +162,13 @@ export default function App() {
       try {
         const pc = getPeerConnection();
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        
+        // Process any ICE candidates that arrived before the remote description was set
+        for (const candidate of pendingCandidatesRef.current) {
+          await pc.addIceCandidate(candidate).catch(() => {});
+        }
+        pendingCandidatesRef.current = [];
+
         const answer = await pc.createAnswer();
         await pc.setLocalDescription(answer);
         socket.emit("answer", { roomId: roomIdRef.current, answer });
@@ -173,7 +181,15 @@ export default function App() {
     async function onAnswer({ answer }) {
       addLog("Answer received from receiver", "info");
       try {
-        await pcRef.current?.setRemoteDescription(new RTCSessionDescription(answer));
+        const pc = pcRef.current;
+        await pc?.setRemoteDescription(new RTCSessionDescription(answer));
+
+        // Process any ICE candidates that arrived before the remote description was set
+        for (const candidate of pendingCandidatesRef.current) {
+          await pc?.addIceCandidate(candidate).catch(() => {});
+        }
+        pendingCandidatesRef.current = [];
+
       } catch (err) {
         addLog(`Set remote answer error: ${err.message}`, "err");
       }
@@ -181,7 +197,13 @@ export default function App() {
 
     async function onIceCandidate({ candidate }) {
       try {
-        await pcRef.current?.addIceCandidate(new RTCIceCandidate(candidate));
+        const pc = pcRef.current;
+        if (!pc || !pc.remoteDescription) {
+          // Queue the candidate until remote description is ready
+          pendingCandidatesRef.current.push(new RTCIceCandidate(candidate));
+        } else {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        }
       } catch { /* non-fatal */ }
     }
 
@@ -213,16 +235,51 @@ export default function App() {
     pcRef.current = pc;
 
     pc.onicecandidate = ({ candidate }) => {
-      if (candidate) socket.emit("ice-candidate", { roomId: roomIdRef.current, candidate });
+      if (candidate) {
+        // Log if we successfully got a public IP from STUN
+        if (candidate.candidate.includes('srflx')) {
+          addLog("DIAGNOSTIC: Discovered Public IP (STUN Success)", "ok");
+        }
+        socket.emit("ice-candidate", { roomId: roomIdRef.current, candidate });
+      }
     };
 
-    pc.oniceconnectionstatechange = () => {
+    pc.onicegatheringstatechange = () => {
+      if (pc.iceGatheringState === "complete") {
+        addLog("DIAGNOSTIC: ICE gathering complete", "info");
+      }
+    };
+
+    pc.oniceconnectionstatechange = async () => {
       addLog(`ICE: ${pc.iceConnectionState}`, "info");
       if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
         addLog("P2P connection established ✓", "ok");
       }
       if (pc.iceConnectionState === "failed") {
-        addLog("ICE connection failed — STUN negotiation unsuccessful", "err");
+        addLog("ICE connection failed — Network blocked pure P2P", "err");
+        
+        // --- DIAGNOSTICS DUMP ---
+        try {
+          const stats = await pc.getStats();
+          let hasSrflx = false;
+          let hasPrflx = false;
+          
+          stats.forEach(report => {
+            if (report.type === 'local-candidate') {
+              if (report.candidateType === 'srflx') hasSrflx = true;
+              if (report.candidateType === 'prflx') hasPrflx = true;
+            }
+          });
+          
+          if (!hasSrflx && !hasPrflx) {
+            addLog("DIAGNOSTIC: STUN failed to find a public IP (Strict Firewall/Symmetric NAT).", "err");
+            addLog("DIAGNOSTIC: A pure P2P connection is mathematically impossible on this network.", "err");
+          } else {
+            addLog("DIAGNOSTIC: Public IPs were found, but the router blocked direct UDP routing.", "err");
+          }
+        } catch (e) {
+          addLog("DIAGNOSTIC: Could not fetch WebRTC stats.", "err");
+        }
       }
     };
 

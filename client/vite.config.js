@@ -6,6 +6,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    allowedHosts: true, // Allow all hosts so ngrok works
     proxy: {
       // Proxy socket.io WS + polling to the signaling server
       '/socket.io': {

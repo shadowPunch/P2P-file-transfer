@@ -67,4 +67,5 @@ node test-server.js
 - AWS for standing full time deployment
 - transfer through firewalls using fallback
 - deployment containerization
+- mesh network for multi recipient
 

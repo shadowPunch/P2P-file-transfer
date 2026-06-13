@@ -6,6 +6,7 @@ export default function TransferScreen({
   roomId,
   peerConnected,
   isEncrypted,
+  isRelayMode,
   transferState,
   logs,
   onFileSelect,
@@ -84,6 +85,12 @@ export default function TransferScreen({
             {peerConnected ? "peer connected" : "waiting for peer"}
           </span>
           <span className={`role-tag ${role}`}>{role}</span>
+          {/* Add a global indicator for WebSocket Relay mode */}
+          {isRelayMode && (
+             <span className="encrypt-badge" title="WebSocket Relay Mode Active" style={{ background: "var(--accent-2)", color: "var(--bg-1)" }}>
+               🌐 relay mode
+             </span>
+          )}
           {isEncrypted && (
             <span className="encrypt-badge" title="End-to-End Encrypted">
               🔒 encrypted
@@ -201,14 +208,19 @@ export default function TransferScreen({
 
       {/* ── Interrupted / Resuming Notice ── */}
       {isInterrupted && (
-        <div className="alert alert-error" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div className="alert alert-error" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
           <div>
             <span>🔌</span> 
-            <span style={{ marginLeft: 8 }}><strong>Connection Interrupted!</strong> The network dropped or peer disconnected.</span>
+            <span style={{ marginLeft: 8 }}><strong>Connection Interrupted or Blocked!</strong> The network dropped or a strict firewall blocked P2P.</span>
           </div>
-          <button className="btn btn-primary" onClick={onReconnect} style={{ padding: "6px 12px", fontSize: "0.85rem" }}>
-            Reconnect & Resume
-          </button>
+          <div style={{ display: 'flex', gap: 12, marginTop: 4 }}>
+            <button className="btn btn-primary" onClick={() => onReconnect(false)} style={{ flex: 1 }}>
+              Retry P2P Connection
+            </button>
+            <button className="btn btn-secondary" onClick={() => onReconnect(true)} style={{ flex: 1 }}>
+              Use Relay Server (Bypass Firewall)
+            </button>
+          </div>
         </div>
       )}
       

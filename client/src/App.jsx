@@ -74,7 +74,8 @@ export default function App() {
   const roleRef        = useRef(null);
   const roomIdRef      = useRef(null);
   const selectedFileRef = useRef(null);
-  const pendingCandidatesRef = useRef([]); 
+  const pendingCandidatesRef = useRef([]);
+  const useRelayRef    = useRef(false); 
   
   // Sender specific refs for resumability
   const bitfieldRef    = useRef(null);
@@ -206,6 +207,56 @@ export default function App() {
       if (roleRef.current === "sender") initiateOffer();
     }
 
+    function onFallbackRelay() {
+      addLog("Peer requested WebSocket Relay fallback. Switching to Relay Mode.", "info");
+      useRelayRef.current = true;
+      if (roleRef.current === "sender") {
+        // We act like the data channel is open
+        isPausedRef.current = false;
+        if (!transferLoopRunningRef.current && selectedFileRef.current) {
+          handleSend(selectedFileRef.current, true);
+        }
+      }
+    }
+
+    async function onRelayData(data) {
+      if (typeof data === "string") {
+        try {
+          const msg = JSON.parse(data);
+          if (msg.type === "ready") {
+            addLog("Receiver accepted file (Relay Mode). Starting transmission...", "ok");
+            isPausedRef.current = false;
+            if (!transferLoopRunningRef.current && selectedFileRef.current) {
+               handleSend(selectedFileRef.current, true);
+            }
+          } else if (msg.type === "resume") {
+            addLog(`Receiver requests resume with bitfield map (Relay Mode)`, "info");
+            bitfieldRef.current = new Uint8Array(msg.bitfield);
+            isPausedRef.current = false;
+            setTransferState(p => ({...p, phase: "sending"}));
+            if (!transferLoopRunningRef.current && selectedFileRef.current) {
+               handleSend(selectedFileRef.current, true);
+            }
+          } else if (msg.type === "pause") {
+            addLog("Peer paused the transfer", "info");
+            isPausedRef.current = true;
+            setTransferState(p => ({...p, phase: "paused"}));
+          } else if (msg.type === "transfer-start") {
+            metaRef.current = msg;
+            nonceRef.current = base64ToNonce(msg.nonce);
+            addLog(`Incoming via Relay: ${msg.name} (${(msg.size / 1048576).toFixed(2)} MB)`, "info");
+            setTransferState({
+              phase: "pending-accept", progress: 0, speed: 0, bytesDone: 0,
+              totalBytes: msg.size, filename: msg.name, filesize: msg.size,
+              chunksDone: 0, totalChunks: msg.totalChunks, hashVerified: null,
+            });
+          }
+        } catch {}
+      } else {
+        await handleIncomingChunk(data);
+      }
+    }
+
     socket.on("connect",           onConnect);
     socket.on("disconnect",        onDisconnect);
     socket.on("peer-joined",       onPeerJoined);
@@ -214,6 +265,8 @@ export default function App() {
     socket.on("answer",            onAnswer);
     socket.on("ice-candidate",     onIceCandidate);
     socket.on("reconnect-signal",  onReconnectSignal);
+    socket.on("fallback-relay",    onFallbackRelay);
+    socket.on("relay-data",        onRelayData);
 
     return () => {
       socket.off("connect",           onConnect);
@@ -224,9 +277,19 @@ export default function App() {
       socket.off("answer",            onAnswer);
       socket.off("ice-candidate",     onIceCandidate);
       socket.off("reconnect-signal",  onReconnectSignal);
+      socket.off("fallback-relay",    onFallbackRelay);
+      socket.off("relay-data",        onRelayData);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function sendData(data) {
+    if (useRelayRef.current) {
+      socket.emit("relay-data", { roomId: roomIdRef.current, data });
+    } else if (dcRef.current?.readyState === "open") {
+      dcRef.current.send(data);
+    }
+  }
 
   // ── RTCPeerConnection factory ──
   function getPeerConnection() {
@@ -350,7 +413,7 @@ export default function App() {
       if (diskWriterRef.current && metaRef.current) {
         addLog(`Sending Bitfield Map to resume transfer`, "info");
         setTransferState(p => ({ ...p, phase: "receiving" }));
-        dc.send(JSON.stringify({ 
+        sendData(JSON.stringify({ 
           type: "resume", 
           bitfield: diskWriterRef.current.getBitfieldArray() 
         }));
@@ -393,7 +456,7 @@ export default function App() {
         return;
       }
 
-      await handleIncomingChunk(data, dc);
+      await handleIncomingChunk(data);
     };
 
     dc.onclose = () => {
@@ -417,7 +480,7 @@ export default function App() {
       startSpeedMeter();
 
       // Tell sender we are ready
-      dcRef.current?.send(JSON.stringify({ type: "ready" }));
+      sendData(JSON.stringify({ type: "ready" }));
     } catch (e) {
       if (e.name === 'AbortError') {
         addLog("Save cancelled by user", "err");
@@ -429,7 +492,7 @@ export default function App() {
   }
 
   /** Process one incoming binary frame. */
-  async function handleIncomingChunk(buffer, dc) {
+  async function handleIncomingChunk(buffer) {
     const { chunkIndex, totalChunks, iv, payload } = decodeFrame(buffer);
 
     let decrypted;
@@ -506,8 +569,7 @@ export default function App() {
   async function handleSend(file, isResuming = false) {
     if (transferLoopRunningRef.current) return;
     
-    const dc = dcRef.current;
-    if (!dc || dc.readyState !== "open") {
+    if (!useRelayRef.current && (!dcRef.current || dcRef.current.readyState !== "open")) {
       addLog("Data channel not ready", "err");
       return;
     }
@@ -544,7 +606,7 @@ export default function App() {
         nonce:        nonceToBase64(nonce),
         sha256,
       };
-      dc.send(JSON.stringify(meta));
+      sendData(JSON.stringify(meta));
       addLog(`Metadata sent. Waiting for receiver to accept…`, "info");
       
       setTransferState({
@@ -578,7 +640,7 @@ export default function App() {
       }
 
       // 2. Check channel alive
-      if (dcRef.current?.readyState !== "open") {
+      if (!useRelayRef.current && dcRef.current?.readyState !== "open") {
         addLog("Data channel interrupted mid-transfer", "err");
         setTransferState(p => p.phase === "done" ? p : { ...p, phase: "interrupted" });
         transferLoopRunningRef.current = false;
@@ -595,9 +657,11 @@ export default function App() {
         }
       }
 
-      // 4. Back-pressure
-      while (dc.bufferedAmount > BUFFER_THRESHOLD) {
-        await new Promise((r) => setTimeout(r, 20));
+      // 4. Back-pressure (WebRTC only)
+      if (!useRelayRef.current && dcRef.current) {
+        while (dcRef.current.bufferedAmount > BUFFER_THRESHOLD) {
+          await new Promise((r) => setTimeout(r, 20));
+        }
       }
 
       const start   = i * CHUNK_SIZE;
@@ -607,7 +671,7 @@ export default function App() {
       const cipher  = await encryptChunk(key, iv, plain);
       const frame   = encodeFrame(i, totalChunks, iv, cipher);
 
-      dc.send(frame);
+      sendData(frame);
       speedBytesRef.current += plain.byteLength;
       chunksSentThisSession++;
 
@@ -622,8 +686,7 @@ export default function App() {
     transferLoopRunningRef.current = false;
     
     // Only set to done if we actually sent everything.
-    // If the loop finished but we were interrupted at the last second, don't say done.
-    if (dcRef.current?.readyState === "open") {
+    if (useRelayRef.current || dcRef.current?.readyState === "open") {
       addLog("All chunks sent ✓", "ok");
       setTransferState(p => ({ ...p, phase: "done", progress: 100 }));
     }
@@ -636,13 +699,30 @@ export default function App() {
     setTransferState(p => ({ ...p, phase: isNowPaused ? "paused" : (roleRef.current === "sender" ? "sending" : "receiving") }));
     
     // Inform peer
-    if (dcRef.current && dcRef.current.readyState === "open") {
-      dcRef.current.send(JSON.stringify({ type: isNowPaused ? "pause" : "resume" }));
-    }
+    sendData(JSON.stringify({ type: isNowPaused ? "pause" : "resume" }));
   }
 
-  function handleManualReconnect() {
-    addLog("Attempting manual reconnect...", "info");
+  function handleManualReconnect(useRelay = false) {
+    if (useRelay) {
+      addLog("Switching to WebSocket Relay Mode...", "info");
+      useRelayRef.current = true;
+      socket.emit("fallback-relay", { roomId: roomIdRef.current });
+      
+      // If we are resuming, we should send the bitfield!
+      if (roleRef.current === "receiver" && diskWriterRef.current && metaRef.current) {
+        addLog(`Sending Bitfield Map to resume transfer (Relay)`, "info");
+        setTransferState(p => ({ ...p, phase: "receiving" }));
+        sendData(JSON.stringify({ 
+          type: "resume", 
+          bitfield: diskWriterRef.current.getBitfieldArray() 
+        }));
+      } else {
+        setTransferState(p => ({...p, phase: "resuming"}));
+      }
+      return;
+    }
+
+    addLog("Attempting manual reconnect (P2P)...", "info");
     setTransferState(p => ({...p, phase: "resuming"}));
     
     // Kill old PC
@@ -733,6 +813,7 @@ export default function App() {
     nonceRef.current     = null;
     bitfieldRef.current  = null;
     isPausedRef.current  = false;
+    useRelayRef.current  = false;
     transferLoopRunningRef.current = false;
     
     socket.disconnect();
@@ -772,8 +853,9 @@ export default function App() {
           <TransferScreen
             role={role}
             roomId={roomId}
-            peerConnected={peerConnected}
             isEncrypted={isEncrypted}
+            peerConnected={peerConnected}
+            isRelayMode={useRelayRef.current}
             transferState={transferState}
             logs={logs}
             onFileSelect={(f) => { setSelectedFile(f); selectedFileRef.current = f; handleSend(f, false); }}

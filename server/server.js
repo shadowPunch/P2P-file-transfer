@@ -139,6 +139,22 @@ io.on("connection", (socket) => {
     socket.to(roomId).emit("reconnect-signal");
   });
 
+  // Fallback to WebSocket relay mode
+  socket.on("fallback-relay", (payload) => {
+    const { roomId } = payload;
+    if (!roomId) return;
+    console.log(`[~] Room ${roomId} falling back to WebSocket Relay mode`);
+    socket.to(roomId).emit("fallback-relay");
+  });
+
+  // Relay data directly (WebSocket fallback)
+  socket.on("relay-data", (payload) => {
+    const { roomId, data } = payload;
+    if (!roomId || data === undefined) return;
+    // Don't log this to avoid console spam during high-speed transfers
+    socket.to(roomId).emit("relay-data", data);
+  });
+
   // --- Disconnect handling ---
   socket.on("disconnect", (reason) => {
     console.log(`[-] Socket disconnected: ${socket.id} (${reason})`);

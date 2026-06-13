@@ -1,6 +1,6 @@
 # p2p.share — Phase 1–3
 
-Direct browser-to-browser file transfer. No file data touches the server.
+Direct browser-to-browser file transfer, within same device.
 
 ## Project structure
 
@@ -49,15 +49,13 @@ node test-server.js
 - ✅ Room management (2-peer max, role assignment)
 - ✅ Offer / answer / ICE relay
 - ✅ Graceful disconnect handling
-- ✅ RTCPeerConnection + DataChannel (ordered)
 - ✅ FileReader chunking with bufferedAmount back-pressure
 - ✅ Blob reassembly + auto-download trigger
-- ✅ Real-time progress, speed meter, log console
-- ✅ Drag-and-drop file picker
-- ✅ Copy-to-clipboard share link
+- ✅ Real-time progress
 
 ## What comes next (Phase 4–5)
-
+- ngrok for tunnelling
+- AWS for standing full time deployment
 - AES-GCM encryption (Web Crypto API, key in URL hash)
 - Per-chunk SHA-256 verification
 - OPFS / streaming writes for large files (>500 MB)

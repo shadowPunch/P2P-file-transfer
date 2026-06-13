@@ -3,6 +3,7 @@
 Direct browser-to-browser file transfer, within same device.
 
 UPDATE 1 -- implemented ngrok tunnelling to allow for interdevice, inter network transfer. However, doesnt work if the network firewall blocks p2p.
+
 UPDATE 2 -- large file transfer enabled with direct to disk writing using OPFS, and routed it to downloads folder. Added pausability and auto reconnection. Also improved UI and removed misleading keys.
 
 ## Project structure

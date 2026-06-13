@@ -61,11 +61,10 @@ node test-server.js
 - Per-chunk SHA-256 verification
 - OPFS / streaming writes for large files (>500 MB)
 - Connection churn recovery with chunk index resume
+- - transfer through firewalls using websocket relays as fallback
 
 ## What comes next (Phase 4–5)
 
 - AWS for standing full time deployment
-- transfer through firewalls using fallback
-- deployment containerization
-- mesh network for multi recipient
 
+- deployment containerization

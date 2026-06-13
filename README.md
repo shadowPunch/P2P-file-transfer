@@ -6,6 +6,8 @@ UPDATE 1 -- implemented ngrok tunnelling to allow for interdevice, inter network
 
 UPDATE 2 -- large file transfer enabled with direct to disk writing using OPFS, and routed it to downloads folder. Added pausability and auto reconnection. Also improved UI and removed misleading keys.
 
+UPDATE 3 -- fallback with websocket relays to get around firewalls restricting p2p.
+
 ## Project structure
 
 ```

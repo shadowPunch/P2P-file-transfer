@@ -6,9 +6,9 @@ import {
   generateNonce, makeIV, nonceToBase64, base64ToNonce,
   encryptChunk, decryptChunk,
   encodeFrame, decodeFrame,
-  hashBuffer,
+  hashFileIncremental
 } from "./crypto";
-import { OPFSWriter, isOpfsAvailable, createDownloadUrl } from "./opfsWriter";
+import { DiskWriter } from "./diskWriter";
 import ConnectionScreen from "./components/ConnectionScreen";
 import TransferScreen   from "./components/TransferScreen";
 
@@ -23,11 +23,10 @@ const STUN_SERVERS = {
 
 const CHUNK_SIZE        = 64 * 1024;         // 64 KB plaintext
 const BUFFER_THRESHOLD  = 4 * 1024 * 1024;  // 4 MB back-pressure threshold
-const LARGE_FILE_LIMIT  = 50 * 1024 * 1024; // 50 MB → switch to OPFS
 
 // ─── URL hash helpers ─────────────────────────────────────────────────────────
 function getKeyFromHash() {
-  const hash = window.location.hash; // e.g. "#key=abc123"
+  const hash = window.location.hash;
   const match = hash.match(/[#&]key=([^&]+)/);
   return match ? match[1] : null;
 }
@@ -35,7 +34,6 @@ function getKeyFromHash() {
 function setKeyInHash(b64Key) {
   const params = new URLSearchParams(window.location.search);
   const roomId = params.get("room") || "";
-  // Keep ?room= in search, put key in hash
   window.location.hash = `key=${b64Key}`;
 }
 
@@ -51,7 +49,7 @@ export default function App() {
   const [logs, setLogs]                   = useState([]);
   const [selectedFile, setSelectedFile]   = useState(null);
   const [transferState, setTransferState] = useState({
-    phase: "idle",     // idle|sending|receiving|resuming|done|error
+    phase: "idle",     // idle | pending-accept | sending | receiving | interrupted | paused | done | error
     progress: 0,
     speed: 0,
     bytesDone: 0,
@@ -60,25 +58,28 @@ export default function App() {
     filesize: 0,
     chunksDone: 0,
     totalChunks: 0,
-    hashVerified: null,  // null | true | false
+    hashVerified: null,
   });
 
-  // ── Refs (WebRTC — no re-render needed) ──
+  // ── Refs ──
   const pcRef          = useRef(null);
   const dcRef          = useRef(null);
-  const downloadRef    = useRef(null);
-  const cryptoKeyRef   = useRef(null);  // CryptoKey
-  const keyReadyRef    = useRef(Promise.resolve()); // resolves when cryptoKeyRef is set
-  const hasKeyOnLoadRef = useRef(false); // check if key was in URL on load
-  const nonceRef       = useRef(null);  // Uint8Array[8], sender-generated
-  const metaRef        = useRef(null);  // incoming file metadata
-  const chunksRef      = useRef([]);    // in-memory chunk buffer (small files)
-  const opfsRef        = useRef(null);  // OPFSWriter instance (large files)
-  const useOpfsRef     = useRef(false);
-  const lastRxChunkRef = useRef(-1);    // last received chunk index (for resume)
-  const roleRef        = useRef(null);  // mirrors `role` state for closures
-  const roomIdRef      = useRef(null);  // mirrors `roomId` state for closures
-  const pendingCandidatesRef = useRef([]); // Queues ICE candidates received before remote description is set
+  const cryptoKeyRef   = useRef(null);
+  const keyReadyRef    = useRef(Promise.resolve());
+  const hasKeyOnLoadRef = useRef(false);
+  const nonceRef       = useRef(null);
+  const metaRef        = useRef(null);
+  
+  const diskWriterRef  = useRef(null);
+  const roleRef        = useRef(null);
+  const roomIdRef      = useRef(null);
+  const selectedFileRef = useRef(null);
+  const pendingCandidatesRef = useRef([]); 
+  
+  // Sender specific refs for resumability
+  const bitfieldRef    = useRef(null);
+  const isPausedRef    = useRef(false);
+  const transferLoopRunningRef = useRef(false);
 
   // ── Speed meter ──
   const speedTimerRef  = useRef(null);
@@ -90,7 +91,6 @@ export default function App() {
     setLogs((prev) => [...prev.slice(-80), logEntry(msg, type)]);
   }, []);
 
-  // ── Speed meter ──
   function startSpeedMeter() {
     speedBytesRef.current = 0;
     clearInterval(speedTimerRef.current);
@@ -105,7 +105,7 @@ export default function App() {
     setTransferState((p) => ({ ...p, speed: 0 }));
   }
 
-  // ── On mount: check URL for room param + encryption key ──
+  // ── On mount ──
   useEffect(() => {
     const params  = new URLSearchParams(window.location.search);
     const roomParam = params.get("room");
@@ -118,13 +118,11 @@ export default function App() {
       hasKeyOnLoadRef.current = true;
       setIsEncrypted(true);
       addLog("Encryption key found in URL — zero-knowledge mode active 🔒", "ok");
-      // Store the promise so chunk handlers can await it before decrypting
       const keyPromise = importKeyFromBase64(keyB64)
         .then((k) => { cryptoKeyRef.current = k; })
         .catch(() => addLog("Failed to parse encryption key from URL", "err"));
       keyReadyRef.current = keyPromise;
     } else if (!roomParam) {
-      // Pre-generate sender key & nonce so that the copied link has key immediately
       setIsEncrypted(true);
       const keyPromise = generateKey()
         .then(async (key) => {
@@ -153,7 +151,7 @@ export default function App() {
       addLog("Peer disconnected", "err");
       setPeerConnected(false);
       setTransferState((p) =>
-        p.phase === "done" ? p : { ...p, phase: p.phase === "receiving" || p.phase === "sending" ? "resuming" : "error" }
+        p.phase === "done" ? p : { ...p, phase: "interrupted" }
       );
     }
 
@@ -163,7 +161,6 @@ export default function App() {
         const pc = getPeerConnection();
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
         
-        // Process any ICE candidates that arrived before the remote description was set
         for (const candidate of pendingCandidatesRef.current) {
           await pc.addIceCandidate(candidate).catch(() => {});
         }
@@ -184,12 +181,10 @@ export default function App() {
         const pc = pcRef.current;
         await pc?.setRemoteDescription(new RTCSessionDescription(answer));
 
-        // Process any ICE candidates that arrived before the remote description was set
         for (const candidate of pendingCandidatesRef.current) {
           await pc?.addIceCandidate(candidate).catch(() => {});
         }
         pendingCandidatesRef.current = [];
-
       } catch (err) {
         addLog(`Set remote answer error: ${err.message}`, "err");
       }
@@ -199,12 +194,16 @@ export default function App() {
       try {
         const pc = pcRef.current;
         if (!pc || !pc.remoteDescription) {
-          // Queue the candidate until remote description is ready
           pendingCandidatesRef.current.push(new RTCIceCandidate(candidate));
         } else {
           await pc.addIceCandidate(new RTCIceCandidate(candidate));
         }
       } catch { /* non-fatal */ }
+    }
+
+    function onReconnectSignal() {
+      addLog("Reconnect signal received, restarting WebRTC handshake", "info");
+      if (roleRef.current === "sender") initiateOffer();
     }
 
     socket.on("connect",           onConnect);
@@ -214,6 +213,7 @@ export default function App() {
     socket.on("offer",             onOffer);
     socket.on("answer",            onAnswer);
     socket.on("ice-candidate",     onIceCandidate);
+    socket.on("reconnect-signal",  onReconnectSignal);
 
     return () => {
       socket.off("connect",           onConnect);
@@ -223,6 +223,7 @@ export default function App() {
       socket.off("offer",             onOffer);
       socket.off("answer",            onAnswer);
       socket.off("ice-candidate",     onIceCandidate);
+      socket.off("reconnect-signal",  onReconnectSignal);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -236,7 +237,6 @@ export default function App() {
 
     pc.onicecandidate = ({ candidate }) => {
       if (candidate) {
-        // Log if we successfully got a public IP from STUN
         if (candidate.candidate.includes('srflx')) {
           addLog("DIAGNOSTIC: Discovered Public IP (STUN Success)", "ok");
         }
@@ -255,39 +255,21 @@ export default function App() {
       if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
         addLog("P2P connection established ✓", "ok");
       }
-      if (pc.iceConnectionState === "failed") {
-        addLog("ICE connection failed — Network blocked pure P2P", "err");
-        
-        // --- DIAGNOSTICS DUMP ---
-        try {
-          const stats = await pc.getStats();
-          let hasSrflx = false;
-          let hasPrflx = false;
-          
-          stats.forEach(report => {
-            if (report.type === 'local-candidate') {
-              if (report.candidateType === 'srflx') hasSrflx = true;
-              if (report.candidateType === 'prflx') hasPrflx = true;
-            }
-          });
-          
-          if (!hasSrflx && !hasPrflx) {
-            addLog("DIAGNOSTIC: STUN failed to find a public IP (Strict Firewall/Symmetric NAT).", "err");
-            addLog("DIAGNOSTIC: A pure P2P connection is mathematically impossible on this network.", "err");
-          } else {
-            addLog("DIAGNOSTIC: Public IPs were found, but the router blocked direct UDP routing.", "err");
-          }
-        } catch (e) {
-          addLog("DIAGNOSTIC: Could not fetch WebRTC stats.", "err");
+      if (pc.iceConnectionState === "disconnected" || pc.iceConnectionState === "failed") {
+        setTransferState(p => p.phase === "done" ? p : { ...p, phase: "interrupted" });
+        if (pc.iceConnectionState === "failed") {
+          addLog("ICE connection failed — Network blocked pure P2P", "err");
         }
       }
     };
 
     pc.onconnectionstatechange = () => {
       addLog(`Connection: ${pc.connectionState}`, "info");
+      if (pc.connectionState === "disconnected" || pc.connectionState === "failed") {
+        setTransferState(p => p.phase === "done" ? p : { ...p, phase: "interrupted" });
+      }
     };
 
-    // Receiver gets the data channel via this event
     pc.ondatachannel = ({ channel }) => {
       addLog(`Data channel received: ${channel.label}`, "info");
       setupReceiverChannel(channel);
@@ -315,52 +297,95 @@ export default function App() {
 
   // ── Sender channel events ──
   function setupSenderChannel(dc) {
-    dc.onopen  = () => { addLog("Data channel open — ready to send 🔒", "ok"); setPeerConnected(true); };
-    dc.onclose = () => addLog("Data channel closed (sender)", "err");
-    dc.onerror = (e) => addLog(`Data channel error: ${String(e)}`, "err");
+    dc.onopen  = () => { 
+      addLog("Data channel open — ready to send 🔒", "ok"); 
+      setPeerConnected(true); 
+    };
+    dc.onclose = () => {
+      addLog("Data channel closed", "err");
+      setTransferState(p => p.phase === "done" ? p : { ...p, phase: "interrupted" });
+    };
+    dc.onerror = (e) => addLog(`Data channel error`, "err");
 
-    // Listen for control frames from receiver (resume-from, ack)
     dc.onmessage = ({ data }) => {
       if (typeof data === "string") {
         try {
           const msg = JSON.parse(data);
-          if (msg.type === "resume-from") {
-            addLog(`Receiver requests resume from chunk ${msg.index}`, "info");
-            // The sender loop reads this ref to restart
-            resumeFromRef.current = msg.index;
+          if (msg.type === "ready") {
+            addLog("Receiver accepted file. Starting transmission...", "ok");
+            isPausedRef.current = false;
+            if (!transferLoopRunningRef.current && selectedFileRef.current) {
+               // Only trigger handleSend if we aren't already looping
+               // Pass true so it skips the metadata phase and starts the chunk loop!
+               handleSend(selectedFileRef.current, true);
+            }
+          } else if (msg.type === "resume") {
+            addLog(`Receiver requests resume with bitfield map`, "info");
+            bitfieldRef.current = new Uint8Array(msg.bitfield);
+            isPausedRef.current = false;
+            setTransferState(p => ({...p, phase: "sending"}));
+            if (!transferLoopRunningRef.current && selectedFileRef.current) {
+               handleSend(selectedFileRef.current, true);
+            }
+          } else if (msg.type === "pause") {
+            addLog("Receiver paused the transfer", "info");
+            isPausedRef.current = true;
+            setTransferState(p => ({...p, phase: "paused"}));
           }
         } catch { /* ignore */ }
       }
     };
   }
 
-  const resumeFromRef = useRef(null); // set by receiver's resume-from message
-
   // ── Receiver channel events ──
   function setupReceiverChannel(dc) {
+    dcRef.current = dc;
     dc.binaryType = "arraybuffer";
 
     dc.onopen = () => {
       addLog("Data channel open — ready to receive 🔒", "ok");
       setPeerConnected(true);
 
-      // If we have a last-received chunk from a previous session, request resume
-      const last = lastRxChunkRef.current;
-      if (last >= 0) {
-        addLog(`Requesting resume from chunk ${last + 1}`, "info");
-        dc.send(JSON.stringify({ type: "resume-from", index: last + 1 }));
-        setTransferState((p) => ({ ...p, phase: "resuming" }));
+      // If we have an existing disk writer, we are resuming an interrupted/paused transfer!
+      if (diskWriterRef.current && metaRef.current) {
+        addLog(`Sending Bitfield Map to resume transfer`, "info");
+        setTransferState(p => ({ ...p, phase: "receiving" }));
+        dc.send(JSON.stringify({ 
+          type: "resume", 
+          bitfield: diskWriterRef.current.getBitfieldArray() 
+        }));
       }
     };
 
     dc.onmessage = async ({ data }) => {
-      // Text frame = metadata JSON or control message
       if (typeof data === "string") {
         try {
           const msg = JSON.parse(data);
-
           if (msg.type === "transfer-start") {
-            await handleTransferStart(msg, dc);
+            // Receiver got metadata. Prompt them to Accept.
+            metaRef.current = msg;
+            nonceRef.current = base64ToNonce(msg.nonce);
+            addLog(`Incoming: ${msg.name} (${(msg.size / 1048576).toFixed(2)} MB)`, "info");
+            if (msg.sha256) addLog(`Expected SHA-256: ${msg.sha256.slice(0, 16)}…`, "info");
+
+            setTransferState({
+              phase: "pending-accept",
+              progress: 0,
+              speed: 0,
+              bytesDone: 0,
+              totalBytes: msg.size,
+              filename: msg.name,
+              filesize: msg.size,
+              chunksDone: 0,
+              totalChunks: msg.totalChunks,
+              hashVerified: null,
+            });
+          } else if (msg.type === "pause") {
+            addLog("Sender paused the transfer", "info");
+            setTransferState(p => ({...p, phase: "paused"}));
+          } else if (msg.type === "resume") {
+            addLog("Sender resumed the transfer", "info");
+            setTransferState(p => ({...p, phase: "receiving"}));
           }
         } catch {
           addLog("Unexpected text message from peer", "err");
@@ -368,171 +393,119 @@ export default function App() {
         return;
       }
 
-      // Binary frame = encrypted chunk
       await handleIncomingChunk(data, dc);
     };
 
-    dc.onclose = () => addLog("Data channel closed (receiver)", "info");
-    dc.onerror = (e) => addLog(`Data channel error: ${String(e)}`, "err");
+    dc.onclose = () => {
+      addLog("Data channel closed", "info");
+      setTransferState(p => p.phase === "done" ? p : { ...p, phase: "interrupted" });
+    };
+    dc.onerror = (e) => addLog(`Data channel error`, "err");
   }
 
-  /** Called when the receiver gets the metadata frame. */
-  async function handleTransferStart(meta, dc) {
-    // Ensure the encryption key is fully imported before we start receiving chunks
-    await keyReadyRef.current;
+  // ── Receiver: Accept File ──
+  async function handleAcceptFile() {
+    const meta = metaRef.current;
+    if (!meta) return;
 
-    metaRef.current = meta;
-    lastRxChunkRef.current = -1;
+    try {
+      addLog("Prompting for save location...", "info");
+      // Open disk writer (prompts user)
+      diskWriterRef.current = await DiskWriter.open(meta.name, meta.totalChunks);
+      
+      setTransferState(p => ({...p, phase: "receiving"}));
+      startSpeedMeter();
 
-    // Decide storage path
-    const large = meta.size > LARGE_FILE_LIMIT && isOpfsAvailable();
-    useOpfsRef.current  = large;
-    chunksRef.current   = [];
-    opfsRef.current     = null;
-
-    if (large) {
-      addLog(`Large file detected (${(meta.size / 1048576).toFixed(1)} MB) — using OPFS streaming`, "info");
-      try {
-        opfsRef.current = await OPFSWriter.open();
-      } catch (err) {
-        addLog(`OPFS unavailable: ${err.message} — falling back to in-memory`, "err");
-        useOpfsRef.current = false;
+      // Tell sender we are ready
+      dcRef.current?.send(JSON.stringify({ type: "ready" }));
+    } catch (e) {
+      if (e.name === 'AbortError') {
+        addLog("Save cancelled by user", "err");
+        setTransferState(p => ({...p, phase: "idle"}));
+      } else {
+        addLog(`File system error: ${e.message}`, "err");
       }
     }
-
-    // Import nonce for IV derivation
-    nonceRef.current = base64ToNonce(meta.nonce);
-
-    addLog(`Incoming: ${meta.name} (${(meta.size / 1048576).toFixed(2)} MB, ${meta.totalChunks} chunks)`, "info");
-    if (meta.sha256) addLog(`Expected SHA-256: ${meta.sha256.slice(0, 16)}…`, "info");
-
-    setTransferState({
-      phase: "receiving",
-      progress: 0,
-      speed: 0,
-      bytesDone: 0,
-      totalBytes: meta.size,
-      filename: meta.name,
-      filesize: meta.size,
-      chunksDone: 0,
-      totalChunks: meta.totalChunks,
-      hashVerified: null,
-    });
-    startSpeedMeter();
-
-    // Ack the metadata so sender knows we're ready (in case it was waiting)
-    dc.send(JSON.stringify({ type: "ready" }));
   }
 
   /** Process one incoming binary frame. */
   async function handleIncomingChunk(buffer, dc) {
     const { chunkIndex, totalChunks, iv, payload } = decodeFrame(buffer);
 
-    // Decrypt
     let decrypted;
     try {
-      if (!cryptoKeyRef.current) {
-        throw new Error("Missing encryption key. Please join using the full share link containing the key.");
-      }
+      if (!cryptoKeyRef.current) throw new Error("Missing encryption key.");
       decrypted = await decryptChunk(cryptoKeyRef.current, iv, payload);
     } catch (err) {
-      if (err.message && err.message.includes("Missing encryption key")) {
-        addLog(err.message, "err");
-      } else {
-        addLog(`Decryption failed on chunk ${chunkIndex} — wrong key or corrupted data`, "err");
-      }
-      setTransferState((p) => ({ ...p, phase: "error" }));
+      addLog(`Decryption failed on chunk ${chunkIndex}`, "err");
+      setTransferState(p => ({ ...p, phase: "error" }));
       return;
     }
 
-    // Store chunk
-    if (useOpfsRef.current && opfsRef.current) {
-      await opfsRef.current.write(chunkIndex, decrypted);
-    } else {
-      chunksRef.current[chunkIndex] = decrypted; // sparse array is fine
+    if (diskWriterRef.current) {
+      await diskWriterRef.current.write(chunkIndex, decrypted);
     }
 
-    lastRxChunkRef.current = chunkIndex;
     speedBytesRef.current += decrypted.byteLength;
-
-    const chunksDone = chunkIndex + 1;
-    const bytesDone  = Math.min(chunksDone * CHUNK_SIZE, metaRef.current?.size || 0);
+    const chunksDone = (diskWriterRef.current?.bytesWritten || 0) / CHUNK_SIZE; 
+    const bytesDone  = diskWriterRef.current?.bytesWritten || 0;
     const progress   = Math.min(100, (bytesDone / (metaRef.current?.size || 1)) * 100);
 
-    setTransferState((p) => ({
-      ...p,
-      bytesDone,
-      progress,
-      chunksDone,
-      totalChunks,
+    setTransferState(p => ({
+      ...p, bytesDone, progress, chunksDone: Math.floor(chunksDone), totalChunks
     }));
 
-    // All chunks received
-    if (chunksDone >= totalChunks) {
+    // If file is completely written
+    if (bytesDone >= (metaRef.current?.size || 0)) {
       stopSpeedMeter();
-      await assembleAndDownload(dc);
+      await finishFileAndVerify();
     }
   }
 
-  /** Reassemble, verify SHA-256, trigger download. */
-  async function assembleAndDownload(dc) {
+  /** Reassemble, verify MD5, trigger download if necessary. */
+  async function finishFileAndVerify() {
     const meta = metaRef.current;
-    if (!meta) return;
+    if (!meta || !diskWriterRef.current) return;
 
     addLog("Transfer complete — verifying integrity…", "info");
 
-    let file;
     try {
-      if (useOpfsRef.current && opfsRef.current) {
-        file = await opfsRef.current.finalize(meta.name, meta.type || "application/octet-stream");
-      } else {
-        // Rebuild ordered blob from sparse array
-        const ordered = [];
-        for (let i = 0; i < chunksRef.current.length; i++) {
-          if (chunksRef.current[i]) ordered.push(chunksRef.current[i]);
-        }
-        const blob = new Blob(ordered, { type: meta.type || "application/octet-stream" });
-        file = new File([blob], meta.name, { type: meta.type || "application/octet-stream" });
-      }
-
-      // SHA-256 verification
+      const { file, hash, handle } = await diskWriterRef.current.finalize(meta.name, meta.type);
+      
       let hashVerified = null;
       if (meta.sha256) {
-        const fileBuffer = await file.arrayBuffer();
-        const actualHash = await hashBuffer(fileBuffer);
-        hashVerified     = actualHash === meta.sha256;
+        hashVerified = (hash === meta.sha256);
         if (hashVerified) {
-          addLog("SHA-256 verified ✓ — file integrity confirmed", "ok");
+          addLog("Rolling Hash verified ✓ — file integrity confirmed", "ok");
         } else {
-          addLog(`SHA-256 mismatch ✕ — expected ${meta.sha256.slice(0, 16)}… got ${actualHash.slice(0, 16)}…`, "err");
+          addLog(`Hash mismatch ✕ — expected ${meta.sha256.slice(0, 16)}… got ${hash.slice(0, 16)}…`, "err");
         }
       }
 
-      const url = createDownloadUrl(file);
-      if (downloadRef.current) {
-        downloadRef.current.href     = url;
-        downloadRef.current.download = meta.name;
-        downloadRef.current.click();
+      // If it fell back to OPFS, trigger a standard download anchor
+      if (!window.showSaveFilePicker && file) {
+         addLog("Downloading from browser sandbox to your computer...", "info");
+         const url = URL.createObjectURL(file);
+         const a = document.createElement("a");
+         a.href = url;
+         a.download = meta.name;
+         a.click();
+         setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      } else {
+         addLog("File saved directly to disk! ✓", "ok");
       }
 
-      // Cleanup OPFS temp file after a delay
-      if (useOpfsRef.current && opfsRef.current) {
-        setTimeout(() => opfsRef.current?.cleanup(), 60_000);
-      }
-      setTimeout(() => URL.revokeObjectURL(url), 60_000);
-
-      chunksRef.current = [];
-      addLog(`Download started: ${meta.name}`, "ok");
-      setTransferState((p) => ({ ...p, phase: "done", progress: 100, hashVerified }));
-
+      setTransferState(p => ({ ...p, phase: "done", progress: 100, hashVerified }));
     } catch (err) {
       addLog(`Assembly error: ${err.message}`, "err");
-      setTransferState((p) => ({ ...p, phase: "error" }));
+      setTransferState(p => ({ ...p, phase: "error" }));
     }
   }
 
   // ── Sender: send file ──
-  async function handleSend(file) {
+  async function handleSend(file, isResuming = false) {
+    if (transferLoopRunningRef.current) return;
+    
     const dc = dcRef.current;
     if (!dc || dc.readyState !== "open") {
       addLog("Data channel not ready", "err");
@@ -549,76 +522,82 @@ export default function App() {
 
     const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
 
-    // Compute SHA-256 of the full file before sending
-    addLog("Computing file hash…", "info");
-    let sha256 = null;
-    try {
-      const fullBuf = await file.arrayBuffer();
-      sha256        = await hashBuffer(fullBuf);
-      addLog(`SHA-256: ${sha256.slice(0, 16)}…`, "info");
-    } catch (err) {
-      addLog(`Hash failed: ${err.message} — continuing without verification`, "err");
-    }
-
-    // Send metadata frame
-    const meta = {
-      type:        "transfer-start",
-      name:         file.name,
-      size:         file.size,
-      mimeType:     file.type,
-      totalChunks,
-      nonce:        nonceToBase64(nonce),
-      sha256,
-    };
-    dc.send(JSON.stringify(meta));
-
-    addLog(`Sending: ${file.name} — ${totalChunks} chunks — encrypted 🔒`, "info");
-    setTransferState({
-      phase: "sending",
-      progress: 0,
-      speed: 0,
-      bytesDone: 0,
-      totalBytes: file.size,
-      filename: file.name,
-      filesize: file.size,
-      chunksDone: 0,
-      totalChunks,
-      hashVerified: null,
-    });
-    startSpeedMeter();
-
-    resumeFromRef.current = null;
-
-    // ── Chunk send loop ──
-    let startIndex = 0;
-
-    // Small delay to let receiver set up before first chunk
-    await new Promise((r) => setTimeout(r, 100));
-
-    // If receiver requested a resume, start from that index
-    if (resumeFromRef.current !== null) {
-      startIndex = resumeFromRef.current;
-      addLog(`Resuming from chunk ${startIndex}`, "info");
-    }
-
-    for (let i = startIndex; i < totalChunks; i++) {
-      // Re-check if receiver sent a newer resume-from
-      if (resumeFromRef.current !== null && resumeFromRef.current !== i) {
-        i = resumeFromRef.current;
-        resumeFromRef.current = null;
-        addLog(`Re-syncing to chunk ${i}`, "info");
+    if (!isResuming) {
+      // Compute Incremental MD5 of the full file before sending
+      addLog("Computing file hash…", "info");
+      let sha256 = null; // using MD5 but keeping variable name for compatibility
+      try {
+        sha256 = await hashFileIncremental(file, (pct) => {
+           // could update UI here, but it's fast
+        });
+        addLog(`MD5: ${sha256.slice(0, 16)}…`, "info");
+      } catch (err) {
+        addLog(`Hash failed: ${err.message}`, "err");
       }
 
-      // Back-pressure: wait until buffer drains
+      const meta = {
+        type:        "transfer-start",
+        name:         file.name,
+        size:         file.size,
+        mimeType:     file.type,
+        totalChunks,
+        nonce:        nonceToBase64(nonce),
+        sha256,
+      };
+      dc.send(JSON.stringify(meta));
+      addLog(`Metadata sent. Waiting for receiver to accept…`, "info");
+      
+      setTransferState({
+        phase: "pending-accept",
+        progress: 0,
+        speed: 0,
+        bytesDone: 0,
+        totalBytes: file.size,
+        filename: file.name,
+        filesize: file.size,
+        chunksDone: 0,
+        totalChunks,
+        hashVerified: null,
+      });
+      return; // Exit here. The 'ready' message from receiver will trigger handleSend again.
+    }
+
+    // --- Transmission Loop ---
+    transferLoopRunningRef.current = true;
+    startSpeedMeter();
+    setTransferState(p => ({ ...p, phase: "sending" }));
+
+    let chunksSentThisSession = 0;
+
+    for (let i = 0; i < totalChunks; i++) {
+      // 1. Check if paused
+      while (isPausedRef.current) {
+        await new Promise((r) => setTimeout(r, 100));
+        // If channel closed while paused, abort loop
+        if (dcRef.current?.readyState !== "open") break;
+      }
+
+      // 2. Check channel alive
+      if (dcRef.current?.readyState !== "open") {
+        addLog("Data channel interrupted mid-transfer", "err");
+        setTransferState(p => p.phase === "done" ? p : { ...p, phase: "interrupted" });
+        transferLoopRunningRef.current = false;
+        return;
+      }
+
+      // 3. Bitfield check (skip chunks the receiver already has)
+      if (bitfieldRef.current) {
+        const byteIdx = Math.floor(i / 8);
+        const bitIdx = i % 8;
+        if ((bitfieldRef.current[byteIdx] & (1 << bitIdx)) !== 0) {
+           // Skip this chunk
+           continue;
+        }
+      }
+
+      // 4. Back-pressure
       while (dc.bufferedAmount > BUFFER_THRESHOLD) {
         await new Promise((r) => setTimeout(r, 20));
-      }
-
-      // Check channel is still alive
-      if (dc.readyState !== "open") {
-        addLog("Data channel closed mid-transfer — pausing", "err");
-        setTransferState((p) => ({ ...p, phase: "resuming" }));
-        return;
       }
 
       const start   = i * CHUNK_SIZE;
@@ -630,32 +609,67 @@ export default function App() {
 
       dc.send(frame);
       speedBytesRef.current += plain.byteLength;
+      chunksSentThisSession++;
 
       const bytesDone = Math.min((i + 1) * CHUNK_SIZE, file.size);
       const progress  = Math.min(100, (bytesDone / file.size) * 100);
-      setTransferState((p) => ({
-        ...p,
-        bytesDone,
-        progress,
-        chunksDone: i + 1,
-        totalChunks,
+      setTransferState(p => ({
+        ...p, bytesDone, progress, chunksDone: i + 1, totalChunks,
       }));
     }
 
     stopSpeedMeter();
-    addLog("All chunks sent ✓", "ok");
-    setTransferState((p) => ({ ...p, phase: "done", progress: 100 }));
+    transferLoopRunningRef.current = false;
+    
+    // Only set to done if we actually sent everything.
+    // If the loop finished but we were interrupted at the last second, don't say done.
+    if (dcRef.current?.readyState === "open") {
+      addLog("All chunks sent ✓", "ok");
+      setTransferState(p => ({ ...p, phase: "done", progress: 100 }));
+    }
+  }
+
+  // ── Manual Control Functions ──
+  function togglePause() {
+    const isNowPaused = !isPausedRef.current;
+    isPausedRef.current = isNowPaused;
+    setTransferState(p => ({ ...p, phase: isNowPaused ? "paused" : (roleRef.current === "sender" ? "sending" : "receiving") }));
+    
+    // Inform peer
+    if (dcRef.current && dcRef.current.readyState === "open") {
+      dcRef.current.send(JSON.stringify({ type: isNowPaused ? "pause" : "resume" }));
+    }
+  }
+
+  function handleManualReconnect() {
+    addLog("Attempting manual reconnect...", "info");
+    setTransferState(p => ({...p, phase: "resuming"}));
+    
+    // Kill old PC
+    if (pcRef.current) {
+      pcRef.current.close();
+      pcRef.current = null;
+    }
+    
+    // Tell the signaling server to ping the other peer to restart WebRTC
+    socket.emit("reconnect-signal", { roomId: roomIdRef.current });
+    
+    // Sender will receive this and call initiateOffer()
+    // Receiver will just recreate the peer connection
+    if (roleRef.current === "receiver") {
+      getPeerConnection();
+    }
   }
 
   // ── Join room ──
-  function handleJoin(id) {
+  function handleJoin(id, requestedRole) {
     setIsConnecting(true);
     setLogs([]);
     addLog(`Joining room ${id}…`, "info");
 
     if (!socket.connected) socket.connect();
 
-    socket.emit("join-room", id, async (resp) => {
+    socket.emit("join-room", { id, role: requestedRole }, async (resp) => {
       if (resp?.error) {
         addLog(`Join failed: ${resp.error}`, "err");
         setIsConnecting(false);
@@ -671,13 +685,14 @@ export default function App() {
       setIsConnecting(false);
       addLog(`Joined room ${resp.roomId} as ${confirmedRole}`, "ok");
 
-      if (confirmedRole === "sender") {
-        // Update URL to include room ID so the address bar reflects the full share link
-        const currentUrl = new URL(window.location.href);
-        currentUrl.searchParams.set("room", resp.roomId);
-        window.history.replaceState(null, "", currentUrl.toString());
+      // Update URL to include room ID so the address bar reflects the full share link
+      const currentUrl = new URL(window.location.href);
+      currentUrl.searchParams.set("room", resp.roomId);
+      window.history.replaceState(null, "", currentUrl.toString());
 
-        // Sender generates the encryption key + nonce if not already pre-generated
+      // If we don't have a key from the URL, we are the creator of this room,
+      // so we must generate the key and nonce.
+      if (!hasKeyOnLoadRef.current) {
         if (!cryptoKeyRef.current) {
           const key   = await generateKey();
           const b64   = await exportKeyToBase64(key);
@@ -692,19 +707,16 @@ export default function App() {
           await keyReadyRef.current;
         }
         addLog("Encryption key generated and embedded in share URL 🔒", "ok");
-      } else {
-        // If we are a receiver and the original URL didn't have a key,
-        // clear the pre-generated key!
-        if (!hasKeyOnLoadRef.current) {
-          cryptoKeyRef.current = null;
-          setIsEncrypted(false);
-          // Clear hash from URL
-          window.history.replaceState(null, "", window.location.pathname + window.location.search);
-        }
+      }
 
-        // Receiver: pre-create peer connection so it's ready for the offer
-        getPeerConnection();
+      // Pre-create peer connection
+      getPeerConnection();
+      
+      if (resp.peerCount === 2) {
         setPeerConnected(true);
+        if (confirmedRole === "sender") {
+           initiateOffer();
+        }
       }
     });
   }
@@ -715,12 +727,14 @@ export default function App() {
     pcRef.current?.close();
     pcRef.current     = null;
     dcRef.current     = null;
-    chunksRef.current = [];
-    opfsRef.current   = null;
+    if (diskWriterRef.current) diskWriterRef.current.cleanup();
+    diskWriterRef.current = null;
     cryptoKeyRef.current = null;
     nonceRef.current     = null;
-    lastRxChunkRef.current = -1;
-    resumeFromRef.current  = null;
+    bitfieldRef.current  = null;
+    isPausedRef.current  = false;
+    transferLoopRunningRef.current = false;
+    
     socket.disconnect();
     setScreen("connect");
     setRoomId(null);
@@ -736,7 +750,6 @@ export default function App() {
       hashVerified: null,
     });
     setLogs([]);
-    // Clear hash from URL
     window.history.replaceState(null, "", window.location.pathname + window.location.search);
   }
 
@@ -763,10 +776,11 @@ export default function App() {
             isEncrypted={isEncrypted}
             transferState={transferState}
             logs={logs}
-            onFileSelect={setSelectedFile}
-            onSend={handleSend}
+            onFileSelect={(f) => { setSelectedFile(f); selectedFileRef.current = f; handleSend(f, false); }}
             onDisconnect={handleDisconnect}
-            downloadRef={downloadRef}
+            onAccept={handleAcceptFile}
+            onTogglePause={togglePause}
+            onReconnect={handleManualReconnect}
           />
         )}
       </main>

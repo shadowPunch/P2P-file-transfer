@@ -10,6 +10,8 @@
  * frame. The 4-byte chunk index makes it deterministic and resumable.
  */
 
+import SparkMD5 from "spark-md5";
+
 const ALGO = { name: "AES-GCM", length: 256 };
 
 // ─── Key generation & import ──────────────────────────────────────────────────
@@ -102,17 +104,53 @@ export function decodeFrame(buffer) {
   return { chunkIndex, totalChunks, iv, payload };
 }
 
-// ─── Integrity hashing ────────────────────────────────────────────────────────
-
 /**
- * SHA-256 hash of an ArrayBuffer.
+ * Compute the MD5 hash of an entire File using an incremental reader to save RAM.
  * Returns lowercase hex string.
  */
-export async function hashBuffer(buf) {
-  const digest = await crypto.subtle.digest("SHA-256", buf);
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
+export function hashFileIncremental(file, onProgress) {
+  return new Promise((resolve, reject) => {
+    const chunkSize = 2 * 1024 * 1024; // 2MB read chunks
+    const chunks = Math.ceil(file.size / chunkSize);
+    let currentChunk = 0;
+    const spark = new SparkMD5.ArrayBuffer();
+    const reader = new FileReader();
+
+    reader.onload = (e) => {
+      spark.append(e.target.result);
+      currentChunk++;
+      if (onProgress) onProgress(currentChunk / chunks);
+
+      if (currentChunk < chunks) {
+        loadNext();
+      } else {
+        resolve(spark.end());
+      }
+    };
+    reader.onerror = () => reject(reader.error);
+
+    function loadNext() {
+      const start = currentChunk * chunkSize;
+      const end = Math.min(start + chunkSize, file.size);
+      reader.readAsArrayBuffer(file.slice(start, end));
+    }
+    loadNext();
+  });
+}
+
+/** Create a new incremental hasher instance for the receiver. */
+export function createIncrementalHash() {
+  return new SparkMD5.ArrayBuffer();
+}
+
+/** Update the receiver's rolling hash with a decrypted chunk. */
+export function updateHash(hasher, buffer) {
+  hasher.append(buffer);
+}
+
+/** Finalize the receiver's hash and return the hex string. */
+export function finalizeHash(hasher) {
+  return hasher.end();
 }
 
 // ─── Base64url helpers ────────────────────────────────────────────────────────

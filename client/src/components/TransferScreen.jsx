@@ -6,12 +6,14 @@ export default function TransferScreen({
   roomId,
   peerConnected,
   isEncrypted,
-  transferState,   // { phase, progress, speed, bytesDone, totalBytes, filename, filesize, chunksDone, totalChunks, hashVerified }
+  transferState,
   logs,
   onFileSelect,
   onSend,
   onDisconnect,
-  downloadRef,
+  onAccept,
+  onTogglePause,
+  onReconnect,
 }) {
   const [dragOver,      setDragOver]      = useState(false);
   const [selectedFile,  setSelectedFile]  = useState(null);
@@ -52,20 +54,24 @@ export default function TransferScreen({
     filename, filesize, chunksDone, totalChunks, hashVerified,
   } = transferState;
 
-  const isSender    = role === "sender";
-  const isIdle      = phase === "idle";
-  const isSending   = phase === "sending";
-  const isReceiving = phase === "receiving";
-  const isResuming  = phase === "resuming";
-  const isDone      = phase === "done";
-  const isError     = phase === "error";
-  const isActive    = isSending || isReceiving || isResuming;
+  const isSender         = role === "sender";
+  const isIdle           = phase === "idle";
+  const isPendingAccept  = phase === "pending-accept";
+  const isSending        = phase === "sending";
+  const isReceiving      = phase === "receiving";
+  const isInterrupted    = phase === "interrupted";
+  const isPaused         = phase === "paused";
+  const isResuming       = phase === "resuming";
+  const isDone           = phase === "done";
+  const isError          = phase === "error";
+  
+  const isActive         = isSending || isReceiving || isResuming || isPaused;
 
   const pctStr  = `${Math.round(progress)}%`;
   const barDone = progress >= 100;
 
   // Progress bar color class
-  const barClass = isResuming ? "resuming" : barDone ? "done" : "";
+  const barClass = (isInterrupted || isPaused) ? "resuming" : barDone ? "done" : "";
 
   return (
     <div className="transfer-screen">
@@ -79,7 +85,7 @@ export default function TransferScreen({
           </span>
           <span className={`role-tag ${role}`}>{role}</span>
           {isEncrypted && (
-            <span className="encrypt-badge" title="AES-GCM 256-bit zero-knowledge encryption">
+            <span className="encrypt-badge" title="End-to-End Encrypted">
               🔒 encrypted
             </span>
           )}
@@ -131,7 +137,7 @@ export default function TransferScreen({
               <p className="drop-zone-text">
                 <strong>Click to browse</strong> or drag a file here
               </p>
-              <p className="drop-zone-hint">Any file type · Large files via OPFS streaming · AES-GCM encrypted</p>
+              <p className="drop-zone-hint">Any file type · Direct Device-to-Device Transfer · End-to-End Encrypted</p>
             </div>
           ) : (
             <div className="drop-zone has-file" style={{ padding: "16px 20px", cursor: "default" }}>
@@ -141,7 +147,7 @@ export default function TransferScreen({
                   <div className="file-name">{selectedFile.name}</div>
                   <div className="file-size">{formatBytes(selectedFile.size)}</div>
                 </div>
-                {!isActive && !isDone && (
+                {!isActive && !isDone && !isPendingAccept && (
                   <button
                     className="copy-btn"
                     style={{ marginLeft: "auto" }}
@@ -154,20 +160,27 @@ export default function TransferScreen({
               </div>
             </div>
           )}
-
-          {selectedFile && !isActive && !isDone && (
-            <button
-              id="btn-send-file"
-              className="btn btn-primary btn-full"
-              onClick={() => onSend(selectedFile)}
-              disabled={!peerConnected || isActive}
-            >
-              {!peerConnected
-                ? <span>Waiting for peer<span className="waiting-dots" /></span>
-                : "Send file 🔒 →"}
-            </button>
-          )}
         </>
+      )}
+
+      {/* ── Receiver: pending accept ── */}
+      {!isSender && isPendingAccept && (
+        <div className="alert alert-info" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span>📥</span>
+            <span>Sender wants to send you a file:</span>
+          </div>
+          <div className="file-info" style={{ background: "var(--bg-3)", border: "1px solid var(--border-color)", padding: "12px" }}>
+            <div className="file-icon">{fileIcon(filename)}</div>
+            <div>
+              <div className="file-name">{filename}</div>
+              <div className="file-size">{formatBytes(filesize)}</div>
+            </div>
+          </div>
+          <button className="btn btn-primary" onClick={onAccept}>
+            Accept File (Choose Save Location)
+          </button>
+        </div>
       )}
 
       {/* ── Receiver: idle wait ── */}
@@ -178,20 +191,35 @@ export default function TransferScreen({
         </div>
       )}
 
-      {/* ── Resuming notice ── */}
+      {/* ── Sender: waiting for receiver to accept ── */}
+      {isSender && isPendingAccept && (
+        <div className="alert alert-info">
+          <span>⏳</span>
+          <span>File selected. Waiting for receiver to accept and choose save location<span className="waiting-dots" /></span>
+        </div>
+      )}
+
+      {/* ── Interrupted / Resuming Notice ── */}
+      {isInterrupted && (
+        <div className="alert alert-error" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <span>🔌</span> 
+            <span style={{ marginLeft: 8 }}><strong>Connection Interrupted!</strong> The network dropped or peer disconnected.</span>
+          </div>
+          <button className="btn btn-primary" onClick={onReconnect} style={{ padding: "6px 12px", fontSize: "0.85rem" }}>
+            Reconnect & Resume
+          </button>
+        </div>
+      )}
+      
       {isResuming && (
         <div className="alert alert-warn">
-          <span>🔄</span>
-          <span>
-            {isSender
-              ? "Transfer paused — waiting for peer to reconnect…"
-              : `Transfer paused at ${pctStr} — peer disconnected. Will resume automatically on reconnect.`}
-          </span>
+          <span>🔄</span> <span style={{ marginLeft: 8 }}>Attempting to reconnect to peer<span className="waiting-dots" /></span>
         </div>
       )}
 
       {/* ── Progress block ── */}
-      {(isActive || isDone || isError) && (
+      {(isActive || isDone || isError || isPaused || isInterrupted) && !isPendingAccept && (
         <div className="progress-block">
           {/* File info */}
           {(filename || filesize) && (
@@ -201,9 +229,17 @@ export default function TransferScreen({
                 <div className="file-name">{filename}</div>
                 <div className="file-size">{formatBytes(filesize)}</div>
               </div>
-              {isDone && hashVerified === true  && <span className="hash-badge ok"  title="SHA-256 verified">✓ verified</span>}
-              {isDone && hashVerified === false && <span className="hash-badge err" title="SHA-256 mismatch">✕ mismatch</span>}
-              {isDone && hashVerified === null  && <span style={{ marginLeft: "auto", color: "var(--accent-2)", fontSize: "1.1rem" }}>✓</span>}
+              
+              {/* Pause / Resume Button */}
+              {!isDone && !isError && !isInterrupted && (
+                 <button 
+                   className="copy-btn" 
+                   style={{ marginLeft: "auto", background: isPaused ? "var(--accent)" : "transparent" }}
+                   onClick={onTogglePause}
+                 >
+                   {isPaused ? "▶ Resume" : "⏸ Pause"}
+                 </button>
+              )}
             </div>
           )}
 
@@ -211,7 +247,9 @@ export default function TransferScreen({
             <span className="progress-label">
               {isSending   ? "sending"
                : isReceiving ? "receiving"
-               : isResuming  ? "paused / resuming"
+               : isInterrupted ? "interrupted"
+               : isPaused  ? "paused"
+               : isResuming ? "resuming"
                : isDone      ? "complete"
                : "error"}
             </span>
@@ -226,7 +264,7 @@ export default function TransferScreen({
           </div>
 
           <div className="progress-meta">
-            {speed > 0 && <span>⚡ {formatSpeed(speed)}</span>}
+            {speed > 0 && !isPaused && !isInterrupted && <span>⚡ {formatSpeed(speed)}</span>}
             {bytesDone > 0 && totalBytes > 0 && (
               <span>{formatBytes(bytesDone)} / {formatBytes(totalBytes)}</span>
             )}
@@ -240,21 +278,19 @@ export default function TransferScreen({
       {/* ── Success alert ── */}
       {isDone && isSender && (
         <div className="alert alert-success">
-          ✓ Transfer complete — receiver is downloading.
+          ✓ Transfer complete — file successfully delivered!
         </div>
       )}
       {isDone && !isSender && (
         <div className="alert alert-success">
-          {hashVerified === false
-            ? "⚠️ File received but SHA-256 hash did not match — file may be corrupted."
-            : "✓ File received and verified — download started automatically."}
+          ✓ File received and saved to disk!
         </div>
       )}
 
       {/* ── Error alert ── */}
       {isError && (
         <div className="alert alert-error">
-          ✕ Transfer failed or peer disconnected. Check the log below.
+          ✕ Transfer failed. Check the log below.
         </div>
       )}
 
@@ -276,11 +312,6 @@ export default function TransferScreen({
         ))}
         <div ref={logEndRef} />
       </div>
-
-      {/* Hidden download anchor */}
-      <a ref={downloadRef} style={{ display: "none" }} aria-hidden="true">
-        download
-      </a>
     </div>
   );
 }

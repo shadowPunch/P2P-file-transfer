@@ -1,0 +1,61 @@
+name: Build and Release Desktop Apps
+
+on:
+  push:
+    tags:
+      - 'v*' # Trigger automatically when you push a version tag (e.g., v1.0.3)
+  workflow_dispatch: # Gives you a manual "Run workflow" button on GitHub
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            command: package:linux
+            artifact_name: Linux-Build
+            artifact_path: server/release/*.deb
+          - os: windows-latest
+            command: package:win
+            artifact_name: Windows-Build
+            artifact_path: server/release/*.exe
+
+    steps:
+      - name: Check out Git repository
+        uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Install Root Dependencies
+        run: npm install
+
+      - name: Install Client Dependencies
+        run: cd client && npm install
+
+      - name: Install Server Dependencies
+        run: cd server && npm install
+
+      - name: Build React Frontend
+        run: cd client && npm run build
+
+      - name: Build Electron Executable
+        run: cd server && npm run ${{ matrix.command }}
+
+      - name: Upload Build Artifacts (for debugging)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.artifact_path }}
+
+      - name: Attach binaries to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact_path }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

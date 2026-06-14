@@ -13,6 +13,10 @@ jobs:
     strategy:
       matrix:
         include:
+          - os: ubuntu-latest
+            command: package:linux
+            artifact_name: Linux-Build
+            artifact_path: server/release/*.deb
           - os: windows-latest
             command: package:win
             artifact_name: Windows-Build

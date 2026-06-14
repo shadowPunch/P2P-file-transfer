@@ -12,7 +12,7 @@ UPDATE 4 -- packaged application using electron. Replaced ngrok with localhost.r
 
 UPDATE  -- hosted on Vercel for frontend CDN and Render for backend. Added this implementation in hosted version folder. 
 
-Deployment Link --  
+Deployment Link --  [https://p2-p-file-transfer-ecru.vercel.app/](https://p2-p-file-transfer-ecru.vercel.app/)
 
 ## Project Structure
 

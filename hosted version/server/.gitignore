@@ -1,0 +1,15 @@
+# Environment variables — NEVER commit secrets
+.env
+.env.*
+
+# Build output (can be regenerated with npm run package:linux)
+release/
+dist/
+
+# Logs
+*.log
+build.log
+
+# OS files
+.DS_Store
+Thumbs.db

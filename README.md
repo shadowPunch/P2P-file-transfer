@@ -41,6 +41,8 @@ p2p-share-phase1-3/
 
 ## Building & Running
 
+## Building & Running
+
 ### Prerequisites
 
 - Node.js ≥ 18
@@ -74,10 +76,25 @@ npm run start:electron
 ### Production Build
 
 ```bash
-# With server running on :3001
-node test-server.js
+# 1. Build the React bundle (outputs to server/dist/)
+cd client && npm run build
+
+# 2. Package for Linux (.deb + AppImage)
+cd server && npm run package:linux
+
+# 3. Package for Windows (NSIS installer) — run on Windows or with Wine
+cd server && npm run package:win
+
+# 4. Package for macOS (DMG) — must run on macOS
+cd server && npm run package:mac
+
+# 5. Build Linux + Windows in one command
+cd server && npm run package:all
 ```
 
+Output artifacts land in `server/release/`.
+
+---
 ## Feature Set
 
 ### Core Transfer Engine
@@ -112,6 +129,19 @@ node test-server.js
 - ✅ **ASAR-safe static serving** — React bundle is unpacked outside the ASAR archive (`asarUnpack`) so `express.static` can serve it using native `fs` calls
 - ✅ **Server-ready gate** — `main.js` awaits the Express `listen` callback before creating the `BrowserWindow`, eliminating the race condition blank-screen bug
 - ✅ **Key fragment filtered from logs** — renderer console messages containing `key=` are suppressed before forwarding to `journalctl`
+
+---
+## Known Limitations
+
+| Limitation | Notes |
+|-----------|-------|
+| **SSH tunnel dependency** | Requires internet access and `ssh` in `$PATH`. `localhost.run` is a free service with no uptime guarantee. |
+| **Tunnel URL is ephemeral** | The `lhr.life` URL changes every time the app restarts. |
+| **Single active room** | The signaling server supports multiple concurrent rooms, but the Electron app UI manages one room at a time. |
+| **Receiver needs a modern browser** | Requires WebRTC, File System Access API (Chrome 86+, Edge 86+; Firefox/Safari use OPFS fallback). |
+| **MD5 for integrity, not authentication** | MD5 is used for file integrity checking only, not for cryptographic authentication (that role is played by AES-GCM's auth tag). |
+| **No resume across app restarts** | The bitfield resume mechanism works within a session (reconnections) but not across full app restarts, as the session nonce and keys are ephemeral. |
+| **Windows cross-compile** | `npm run package:win` from Linux requires Wine and may miss code-signing. Native Windows build is recommended for distribution. |
 
 ---
 

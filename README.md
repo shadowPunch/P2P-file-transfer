@@ -8,7 +8,11 @@ UPDATE 2 -- large file transfer enabled with direct to disk writing using OPFS, 
 
 UPDATE 3 -- fallback with websocket relays to get around firewalls restricting p2p.
 
-UPDATE 4 -- packaged application using electron. Replaced ngrok with localhost.run for tunnelling (SSH tunneling) to avoi auth key registration. Packaged application for linux, windows, macOs.  
+UPDATE 4 -- packaged application using electron. Replaced ngrok with localhost.run for tunnelling (SSH tunneling) to avoi auth key registration. Packaged application for linux, windows, macOs. Works as an independent application. 
+
+UPDATE  -- hosted on Vercel for frontend CDN and Render for backend. Added this implementation in hosted version folder. 
+
+Deployment Link --  
 
 ## Project Structure
 
@@ -38,8 +42,6 @@ p2p-share-phase1-3/
 └── README.md
 ```
 ---
-
-## Building & Running
 
 ## Building & Running
 

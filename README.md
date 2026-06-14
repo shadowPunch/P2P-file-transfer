@@ -1,6 +1,6 @@
-# p2p.share — Phase 1–3
+# p2p.share
 
-Direct browser-to-browser file transfer, within same device.
+Initial -- Direct browser-to-browser file transfer, within same device.
 
 UPDATE 1 -- implemented ngrok tunnelling to allow for interdevice, inter network transfer. However, doesnt work if the network firewall blocks p2p.
 
@@ -98,37 +98,26 @@ Output artifacts land in `server/release/`.
 ## Feature Set
 
 ### Core Transfer Engine
-- ✅ **WebRTC Data Channel** — direct peer-to-peer transfer, no relay for data
-- ✅ **64 KB chunked streaming** — constant memory footprint regardless of file size
-- ✅ **AES-GCM-256 encryption** — every chunk independently encrypted
-- ✅ **Per-chunk IV derivation** — `nonce[8] || chunkIndex[4]` (deterministic, no IV reuse)
-- ✅ **MD5 incremental integrity hashing** — rolling hash, verified on receipt
-- ✅ **Back-pressure control** — sender waits when WebRTC buffer exceeds 4 MB
-- ✅ **Out-of-order chunk buffering** — `DiskWriter` flushes only contiguous runs to disk
+- **WebRTC Data Channel** — direct peer-to-peer transfer, no relay for data
+- **64 KB chunked streaming** — constant memory footprint regardless of file size
+- **AES-GCM-256 encryption** — every chunk independently encrypted
+- **MD5 incremental integrity hashing** — rolling hash, verified on receipt
+- **Back-pressure control** — sender waits when WebRTC buffer exceeds 4 MB
+- **Out-of-order chunk buffering** — `DiskWriter` flushes only contiguous runs to disk
 
 ### Reliability & Recovery
-- ✅ **Bitfield-based resume** — receiver tracks received chunks in a bitfield; resumes from gaps after reconnection
-- ✅ **Automatic WebSocket relay fallback** — if P2P ICE fails or times out, the transfer falls back to a WebSocket relay through the signaling server
-- ✅ **ICE failure promotion** — stalled `disconnected` state auto-promotes to relay after 20 seconds
-- ✅ **Manual reconnect & pause/resume** — sender and receiver can pause mid-transfer and resume
+- **Bitfield-based resume** — receiver tracks received chunks in a bitfield; resumes from gaps after reconnection
+- **Automatic WebSocket relay fallback** — if P2P ICE fails or times out, the transfer falls back to a WebSocket relay through the signaling server
+- **ICE failure promotion** — stalled `disconnected` state auto-promotes to relay after 20 seconds
+- **Manual reconnect & pause/resume** — sender and receiver can pause mid-transfer and resume
 
 ### Storage
-- ✅ **File System Access API** (`showSaveFilePicker`) — writes directly to the user's chosen location on disk, no browser sandbox limitation
-- ✅ **OPFS fallback** — browsers without File System Access API write to the Origin Private File System then trigger a standard download
+- *File System Access API** (`showSaveFilePicker`) — writes directly to the user's chosen location on disk, no browser sandbox limitation
+- **OPFS fallback** — browsers without File System Access API write to the Origin Private File System then trigger a standard download
 
 ### Connectivity
-- ✅ **SSH reverse tunnel** (`localhost.run`) — exposes the local signaling server as a public HTTPS URL
-- ✅ **STUN servers** — Google STUN servers for NAT traversal
-- ✅ **TURN servers** (`openrelay.metered.ca`) — relayed ICE path for symmetric NATs
-- ✅ **Tunnel-ready push** — Electron main process pushes the public URL to the renderer via `webContents.send` the instant SSH tunnel establishes (no polling)
-- ✅ **Copy-link guard** — "copy link" button is disabled until the tunnel is ready, preventing accidental localhost URL copying
-
-### Electron / Desktop
-- ✅ **Self-contained executable** — packaged with `electron-builder`; ships its own Node.js runtime, no user installation of Node required
-- ✅ **Linux AppArmor compatibility** — `--no-sandbox`, `--disable-dev-shm-usage`, `--no-zygote` flags prevent Compositor crashes under restrictive AppArmor profiles applied by `.deb` packages
-- ✅ **ASAR-safe static serving** — React bundle is unpacked outside the ASAR archive (`asarUnpack`) so `express.static` can serve it using native `fs` calls
-- ✅ **Server-ready gate** — `main.js` awaits the Express `listen` callback before creating the `BrowserWindow`, eliminating the race condition blank-screen bug
-- ✅ **Key fragment filtered from logs** — renderer console messages containing `key=` are suppressed before forwarding to `journalctl`
+- **SSH reverse tunnel** (`localhost.run`) — exposes the local signaling server as a public HTTPS URL
+- **STUN servers** — Google STUN servers for NAT traversal
 
 ---
 ## Known Limitations
@@ -136,12 +125,9 @@ Output artifacts land in `server/release/`.
 | Limitation | Notes |
 |-----------|-------|
 | **SSH tunnel dependency** | Requires internet access and `ssh` in `$PATH`. `localhost.run` is a free service with no uptime guarantee. |
-| **Tunnel URL is ephemeral** | The `lhr.life` URL changes every time the app restarts. |
+| **Tunnel URL is dynamic** | The `lhr.life` URL changes every time the app restarts. |
 | **Single active room** | The signaling server supports multiple concurrent rooms, but the Electron app UI manages one room at a time. |
 | **Receiver needs a modern browser** | Requires WebRTC, File System Access API (Chrome 86+, Edge 86+; Firefox/Safari use OPFS fallback). |
-| **MD5 for integrity, not authentication** | MD5 is used for file integrity checking only, not for cryptographic authentication (that role is played by AES-GCM's auth tag). |
-| **No resume across app restarts** | The bitfield resume mechanism works within a session (reconnections) but not across full app restarts, as the session nonce and keys are ephemeral. |
-| **Windows cross-compile** | `npm run package:win` from Linux requires Wine and may miss code-signing. Native Windows build is recommended for distribution. |
 
 ---
 

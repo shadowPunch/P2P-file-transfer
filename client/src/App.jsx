@@ -18,6 +18,17 @@ const STUN_SERVERS = {
     { urls: "stun:stun.l.google.com:19302" },
     { urls: "stun:stun1.l.google.com:19302" },
     { urls: "stun:stun2.l.google.com:19302" },
+    // Free TURN servers so cross-NAT connections work when one peer is on
+    // a remote network (e.g. receiver opening the SSH tunnel URL).
+    {
+      urls: [
+        "turn:openrelay.metered.ca:80",
+        "turn:openrelay.metered.ca:443",
+        "turn:openrelay.metered.ca:443?transport=tcp",
+      ],
+      username: "openrelayproject",
+      credential: "openrelayproject",
+    },
   ],
 };
 
@@ -48,6 +59,7 @@ export default function App() {
   const [isEncrypted, setIsEncrypted]     = useState(false);
   const [logs, setLogs]                   = useState([]);
   const [selectedFile, setSelectedFile]   = useState(null);
+  const [tunnelUrl, setTunnelUrl]           = useState(null);
   const [transferState, setTransferState] = useState({
     phase: "idle",     // idle | pending-accept | sending | receiving | interrupted | paused | done | error
     progress: 0,
@@ -137,6 +149,32 @@ export default function App() {
     }
   }, [addLog]);
 
+  // ── Electron Public URL integration ─────────────────────────────────────────────
+  useEffect(() => {
+    if (!window.electronAPI) return;
+
+    // Register push listener FIRST so we don't miss the event.
+    // main.js calls win.webContents.send('tunnel-url', url) the instant
+    // the SSH tunnel establishes — no polling needed.
+    if (window.electronAPI.onTunnelUrl) {
+      window.electronAPI.onTunnelUrl((url) => {
+        addLog(`🌐 Public tunnel ready: ${url}`, "ok");
+        setTunnelUrl(url);
+      });
+    }
+
+    // One-shot check: if the tunnel was already up before this component
+    // mounted (e.g. the window loaded after the tunnel was established).
+    window.electronAPI.getPublicUrl?.().then((url) => {
+      if (url) {
+        addLog(`🌐 Tunnel already active: ${url}`, "ok");
+        setTunnelUrl(url);
+      } else {
+        addLog("SSH tunnel connecting… share link will update when ready.", "info");
+      }
+    });
+  }, [addLog]);
+
   // ── Socket event wiring ──
   useEffect(() => {
     function onConnect()    { addLog("Connected to signaling server", "ok"); setIsConnecting(false); }
@@ -208,7 +246,7 @@ export default function App() {
     }
 
     function onFallbackRelay() {
-      addLog("Peer requested WebSocket Relay fallback. Switching to Relay Mode.", "info");
+      addLog("⚠️ Peer requested WebSocket Relay fallback. Switching to Relay Mode.", "warn");
       useRelayRef.current = true;
       if (roleRef.current === "sender") {
         // We act like the data channel is open
@@ -318,14 +356,23 @@ export default function App() {
       if (pc.iceConnectionState === "connected" || pc.iceConnectionState === "completed") {
         addLog("P2P connection established ✓", "ok");
       }
-      if (pc.iceConnectionState === "disconnected" || pc.iceConnectionState === "failed") {
-        if (pc.iceConnectionState === "failed") {
-          addLog("ICE connection failed — Network blocked pure P2P. Automatically falling back to Relay Mode.", "err");
-          // Automatically fallback!
-          handleManualReconnect(true);
-        } else {
-          setTransferState(p => p.phase === "done" ? p : { ...p, phase: "interrupted" });
-        }
+      if (pc.iceConnectionState === "disconnected") {
+        setTransferState(p => p.phase === "done" ? p : { ...p, phase: "interrupted" });
+        // Give ICE 20 seconds to recover from a transient disconnection before
+        // auto-promoting to relay fallback. This handles the case where ICE
+        // stalls at 'disconnected' (common when one peer is on a remote network
+        // via the SSH tunnel) rather than advancing to 'failed'.
+        setTimeout(() => {
+          if (pcRef.current?.iceConnectionState === "disconnected" ||
+              pcRef.current?.iceConnectionState === "failed") {
+            addLog("ICE stalled — auto-switching to WebSocket Relay Mode.", "err");
+            handleManualReconnect(true);
+          }
+        }, 20_000);
+      }
+      if (pc.iceConnectionState === "failed") {
+        addLog("ICE failed — automatically falling back to Relay Mode.", "err");
+        handleManualReconnect(true);
       }
     };
 
@@ -711,7 +758,7 @@ export default function App() {
 
   function handleManualReconnect(useRelay = false) {
     if (useRelay) {
-      addLog("Switching to WebSocket Relay Mode...", "info");
+      addLog("⚠️ Switching to WebSocket Relay Mode...", "warn");
       useRelayRef.current = true;
       socket.emit("fallback-relay", { roomId: roomIdRef.current });
       
@@ -865,6 +912,7 @@ export default function App() {
             isRelayMode={useRelayRef.current}
             transferState={transferState}
             logs={logs}
+            tunnelUrl={tunnelUrl}
             onFileSelect={(f) => { setSelectedFile(f); selectedFileRef.current = f; handleSend(f, false); }}
             onDisconnect={handleDisconnect}
             onAccept={handleAcceptFile}

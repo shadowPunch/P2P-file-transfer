@@ -9,6 +9,7 @@ export default function TransferScreen({
   isRelayMode,
   transferState,
   logs,
+  tunnelUrl,
   onFileSelect,
   onSend,
   onDisconnect,
@@ -44,8 +45,19 @@ export default function TransferScreen({
   }
 
   async function handleCopyLink() {
-    const fullUrl = `${window.location.origin}${window.location.pathname}?room=${roomId}${window.location.hash}`;
-    await copyToClipboard(fullUrl);
+    // Don't allow copying until the public tunnel URL is available.
+    // Using localhost would give the recipient a link that only works on
+    // the sender's machine.
+    if (!tunnelUrl) {
+      alert("The public share link is not ready yet — SSH tunnel is still connecting. Please wait a moment and try again.");
+      return;
+    }
+    const fullUrl = `${tunnelUrl}${window.location.pathname}?room=${roomId}${window.location.hash}`;
+    if (window.electronAPI && window.electronAPI.copyToClipboard) {
+      window.electronAPI.copyToClipboard(fullUrl);
+    } else {
+      await copyToClipboard(fullUrl);
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
@@ -116,11 +128,12 @@ export default function TransferScreen({
           </span>
         </div>
         <button
-          className={`copy-btn ${copied ? "copied" : ""}`}
+          className={`copy-btn ${copied ? "copied" : ""} ${!tunnelUrl ? "waiting" : ""}`}
           onClick={handleCopyLink}
-          style={{ fontSize: "0.8rem", padding: "4px 10px" }}
+          title={!tunnelUrl ? "SSH tunnel connecting… please wait" : `Copy: ${tunnelUrl}?room=${roomId}`}
+          style={{ fontSize: "0.8rem", padding: "4px 10px", opacity: tunnelUrl ? 1 : 0.55 }}
         >
-          {copied ? "✓ copied" : "copy link"}
+          {copied ? "✓ copied" : !tunnelUrl ? "⏳ tunnel…" : "copy link"}
         </button>
       </div>
 

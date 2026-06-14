@@ -1,11 +1,12 @@
-/** Generate a random 6-char uppercase room ID, e.g. "X4K9PL" */
+/**
+ * Generate a cryptographically random 6-char uppercase room ID, e.g. "X4K9PL".
+ * Uses crypto.getRandomValues() (CSPRNG) — NOT Math.random() — so the ID
+ * cannot be guessed by an observer who knows the timestamp or sequence.
+ */
 export function generateRoomId() {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no O/0/1/I ambiguity
-  let id = "";
-  for (let i = 0; i < 6; i++) {
-    id += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return id;
+  const bytes = crypto.getRandomValues(new Uint8Array(6));
+  return Array.from(bytes, (b) => chars[b % chars.length]).join("");
 }
 
 /** Human-readable file size */

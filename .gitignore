@@ -4,6 +4,7 @@ node_modules/
 # Production build directories
 dist/
 build/
+release/
 
 # Environment variables
 .env
@@ -12,7 +13,9 @@ build/
 # Logs
 *.log
 npm-debug.log*
+build.log
 
 # OS Generated Files
 .DS_Store
 Thumbs.db
+Thumbs.db:encryptionkey

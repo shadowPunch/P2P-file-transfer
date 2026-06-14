@@ -1,15 +1,78 @@
 {
   "name": "p2p-share-server",
-  "version": "1.0.0",
-  "description": "Signaling server for P2P Web Share",
-  "main": "server.js",
+  "version": "1.1.0",
+  "description": "Sovereign P2P Share — zero-knowledge, direct browser-to-browser file transfer",
+  "main": "main.js",
+  "author": {
+    "name": "P2P Dev",
+    "email": "dev@p2p.local"
+  },
+  "homepage": "https://github.com/p2p-share",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "start:electron": "electron . --no-sandbox",
+    "clean": "rm -rf release/",
+    "package:linux": "npm run clean && electron-builder --linux",
+    "package:win": "npm run clean && electron-builder --win",
+    "package:mac": "npm run clean && electron-builder --mac",
+    "package:all": "npm run clean && electron-builder --linux --win"
+  },
+  "build": {
+    "appId": "com.p2pshare.app",
+    "productName": "Sovereign P2P Share",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "server.js",
+      "package.json",
+      ".env",
+      "dist/**/*",
+      "node_modules/**/*"
+    ],
+    "asarUnpack": [
+      "dist/**/*"
+    ],
+    "linux": {
+      "target": ["deb", "AppImage"],
+      "category": "Network",
+      "maintainer": "P2P Dev <dev@p2p.local>",
+      "description": "Zero-knowledge encrypted file transfer"
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ],
+      "artifactName": "${productName}-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Sovereign P2P Share"
+    },
+    "mac": {
+      "target": [
+        { "target": "dmg", "arch": ["x64", "arm64"] }
+      ],
+      "category": "public.app-category.utilities",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    }
   },
   "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
     "express": "^4.18.2",
-    "socket.io": "^4.7.2",
-    "cors": "^2.8.5"
+    "express-rate-limit": "^8.5.2",
+    "helmet": "^8.2.0",
+    "socket.io": "^4.7.2"
+  },
+  "devDependencies": {
+    "electron": "^42.4.0",
+    "electron-builder": "^26.15.3"
   }
 }

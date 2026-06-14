@@ -21,15 +21,22 @@ export default function ConnectionScreen({ onJoin, isConnecting, isEncrypted }) 
   }, []);
 
   function handleAction(role) {
-    if (hasRoomInUrl) {
-      if (!hasKeyInUrl) {
-        alert("Missing encryption key! Please join using the full share link provided by the sender.");
-        return;
-      }
-      onJoin(roomIdFromUrl, role);
-    } else {
+    if (role === "sender") {
+      // Senders always create a new room. Ignore old URL parameters.
       const newRoomId = generateRoomId();
       onJoin(newRoomId, role);
+    } else {
+      // Receivers use the URL room if present.
+      if (hasRoomInUrl) {
+        if (!hasKeyInUrl) {
+          alert("Missing encryption key! Please join using the full share link provided by the sender.");
+          return;
+        }
+        onJoin(roomIdFromUrl, role);
+      } else {
+        const newRoomId = generateRoomId();
+        onJoin(newRoomId, role);
+      }
     }
   }
 

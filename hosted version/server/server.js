@@ -184,7 +184,7 @@ io.on("connection", (socket) => {
   });
 
   socket.on("relay-data", (payload) => {
-    if (isRateLimited()) return;
+    // DO NOT rate limit relay-data (it sends file chunks at high speed)
     const { roomId, data } = payload;
     if (!roomId || data === undefined) return;
     socket.to(roomId).emit("relay-data", data);

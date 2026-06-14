@@ -686,11 +686,14 @@ export default function App() {
         }
       }
 
-      // 4. Back-pressure (WebRTC only)
+      // 4. Back-pressure
       if (!useRelayRef.current && dcRef.current) {
         while (dcRef.current.bufferedAmount > BUFFER_THRESHOLD) {
           await new Promise((r) => setTimeout(r, 20));
         }
+      } else if (useRelayRef.current) {
+        // Artificial back-pressure for WebSocket Relay Mode to prevent buffer overflow
+        await new Promise((r) => setTimeout(r, 5));
       }
 
       const start   = i * CHUNK_SIZE;
@@ -860,7 +863,8 @@ export default function App() {
       hashVerified: null,
     });
     setLogs([]);
-    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+    // Clear URL completely so refresh doesn't trigger "missing key" bug
+    window.history.replaceState(null, "", window.location.pathname);
   }
 
   // ── Render ──

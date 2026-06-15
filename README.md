@@ -10,7 +10,7 @@ UPDATE 3 -- fallback with websocket relays to get around firewalls restricting p
 
 UPDATE 4 -- packaged application using electron. Replaced ngrok with localhost.run for tunnelling (SSH tunneling) to avoi auth key registration. Packaged application for linux, windows, macOs. Works as an independent application. 
 
-UPDATE  -- hosted on Vercel for frontend CDN and Render for backend. Added this implementation in hosted version folder. 
+UPDATE 5 -- hosted on Vercel for frontend CDN and Render for backend. Added this implementation in hosted version folder. 
 
 Deployment Link --  [https://p2-p-file-transfer-ecru.vercel.app/](https://p2-p-file-transfer-ecru.vercel.app/)
 
@@ -135,4 +135,4 @@ Output artifacts land in `server/release/`.
 
 ### To be added
 - in browser implementation
-- full time standing server implementation (Render/Vercel or AWS)
+

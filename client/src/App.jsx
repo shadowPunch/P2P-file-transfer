@@ -746,7 +746,7 @@ export default function App() {
     sendData(JSON.stringify({ type: isNowPaused ? "pause" : "resume" }));
   }
 
-  function handleManualReconnect(useRelay = false) {
+  async function handleManualReconnect(useRelay = false) {
     if (useRelay) {
       addLog("⚠️ Switching to WebSocket Relay Mode...", "warn");
       useRelayRef.current = true;

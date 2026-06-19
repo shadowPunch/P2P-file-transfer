@@ -289,7 +289,7 @@ export default function App() {
 
   function sendData(data) {
     if (useRelayRef.current) {
-      socket.emit("relay-data", { roomId: roomIdRef.current, data });
+      socket.emit("relay-data", roomIdRef.current, data);
     } else if (dcRef.current?.readyState === "open") {
       dcRef.current.send(data);
     }

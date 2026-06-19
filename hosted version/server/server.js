@@ -230,8 +230,7 @@ io.on("connection", (socket) => {
   const MAX_RELAY_FRAME_BYTES = 96 * 1024;
   const MAX_RELAY_BYTES_PER_SEC = 20 * 1024 * 1024;
 
-  socket.on("relay-data", (payload) => {
-    const { roomId, data } = payload || {};
+  socket.on("relay-data", (roomId, data) => {
     if (!roomId || data === undefined || !isMemberOf(roomId)) return;
 
     const frameSize = data?.byteLength ?? (typeof data === "string" ? data.length : 0);

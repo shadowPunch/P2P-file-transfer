@@ -53,14 +53,15 @@ app.use(helmet({
     directives: {
       defaultSrc:      ["'self'"],
       scriptSrc:       ["'self'"],
-      styleSrc:        ["'self'", "'unsafe-inline'"],   // CSS modules may use inline styles
-      connectSrc:      ["'self'", "ws:", "wss:"],        // WebSocket to same origin
+      styleSrc:        ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc:         ["'self'", "https://fonts.gstatic.com"],
+      connectSrc:      ["'self'", "ws:", "wss:"],
       imgSrc:          ["'self'", "data:"],
       objectSrc:       ["'none'"],
       frameAncestors:  ["'none'"],
     },
   },
-  crossOriginEmbedderPolicy: false, // Required for WebRTC SharedArrayBuffer usage
+  crossOriginEmbedderPolicy: false,
 }));
 
 // HTTP rate limiter — 100 req/min per IP on all HTTP routes.
@@ -290,8 +291,7 @@ io.on("connection", (socket) => {
   const MAX_RELAY_FRAME_BYTES = 96 * 1024;      // must match maxHttpBufferSize
   const MAX_RELAY_BYTES_PER_SEC = 20 * 1024 * 1024; // 20 MB/s per socket
 
-  socket.on("relay-data", (payload) => {
-    const { roomId, data } = payload || {};
+  socket.on("relay-data", (roomId, data) => {
     if (!roomId || data === undefined || !isMemberOf(roomId)) return;
 
     const frameSize = data?.byteLength ?? (typeof data === "string" ? data.length : 0);

@@ -314,7 +314,7 @@ export default function App() {
 
   function sendData(data) {
     if (useRelayRef.current) {
-      socket.emit("relay-data", { roomId: roomIdRef.current, data });
+      socket.emit("relay-data", roomIdRef.current, data);
     } else if (dcRef.current?.readyState === "open") {
       dcRef.current.send(data);
     }
@@ -723,7 +723,6 @@ export default function App() {
 
       sendData(frame);
       speedBytesRef.current += plain.byteLength;
-      chunksSentThisSession++;
 
       const bytesDone = Math.min((i + 1) * CHUNK_SIZE, file.size);
       const progress  = Math.min(100, (bytesDone / file.size) * 100);

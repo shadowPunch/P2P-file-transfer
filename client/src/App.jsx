@@ -325,8 +325,14 @@ export default function App() {
     if (pcRef.current) return pcRef.current;
 
     const iceConfig = await fetchIceConfig();
-    const pc        = new RTCPeerConnection(iceConfig);
-    pcRef.current   = pc;
+
+    // Double-check after the async fetch: a concurrent call (e.g. onOffer firing
+    // while handleJoin is still awaiting) may have completed and already set
+    // pcRef.current. Return that PC instead of creating a duplicate.
+    if (pcRef.current) return pcRef.current;
+
+    const pc      = new RTCPeerConnection(iceConfig);
+    pcRef.current = pc;
 
     pc.onicecandidate = ({ candidate }) => {
       if (candidate) {

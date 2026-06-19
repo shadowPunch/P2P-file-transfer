@@ -10,7 +10,9 @@ UPDATE 3 -- fallback with websocket relays to get around firewalls restricting p
 
 UPDATE 4 -- packaged application using electron. Replaced ngrok with localhost.run for tunnelling (SSH tunneling) to avoi auth key registration. Packaged application for linux, windows, macOs. Works as an independent application. 
 
-UPDATE 5 -- hosted on Vercel for frontend CDN and Render for backend. Added this implementation in hosted version folder. 
+UPDATE 5 -- hosted on Vercel for frontend CDN and Railway for backend. Added this implementation in hosted version folder.
+
+UPDATE 6 -- Implemented rate limiting, input sanitation, session and secrets management, dependency scanning & Vulnerability Patching. audit logging and security headers.
 
 Deployment Link --  [https://p2-p-file-transfer-ecru.vercel.app/](https://p2-p-file-transfer-ecru.vercel.app/)
 
@@ -126,7 +128,6 @@ Output artifacts land in `server/release/`.
 
 | Limitation | Notes |
 |-----------|-------|
-| **SSH tunnel dependency** | Requires internet access and `ssh` in `$PATH`. `localhost.run` is a free service with no uptime guarantee. |
 | **Tunnel URL is dynamic** | The `lhr.life` URL changes every time the app restarts. |
 | **Single active room** | The signaling server supports multiple concurrent rooms, but the Electron app UI manages one room at a time. |
 | **Receiver needs a modern browser** | Requires WebRTC, File System Access API (Chrome 86+, Edge 86+; Firefox/Safari use OPFS fallback). |

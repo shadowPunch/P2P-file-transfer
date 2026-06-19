@@ -29,7 +29,6 @@
       "preload.js",
       "server.js",
       "package.json",
-      ".env",
       "dist/**/*",
       "node_modules/**/*"
     ],

@@ -18,7 +18,7 @@ global.electronDistPath = distPath;
 // ─── Start the Express / Socket.io signaling server ─────────────────────────
 // server.js exports a `serverReady` Promise that resolves once the HTTP
 // server is actually bound and listening — we use it below.
-const { serverReady } = require("./server.js");
+const { serverReady, allowedOrigins } = require("./server.js");
 
 // ─── Chromium flags required for Linux desktop (non-terminal) launches ───────
 // --no-sandbox: required for packaged Electron on Linux without user namespaces.
@@ -93,16 +93,22 @@ async function createWindow() {
       if (match && !publicUrl) {
         publicUrl = match[0];
         console.log(`[main] SSH Tunnel established: ${publicUrl}`);
-        // Push the URL to all open renderer windows immediately
-        // so the React UI doesn't have to poll and risk copying a stale localhost link.
+        // Register tunnel URL in CORS allowlist so the remote receiver can connect.
+        allowedOrigins.push(publicUrl);
+        // Push URL to renderer so the React UI can display the share link.
         BrowserWindow.getAllWindows().forEach((win) => {
           win.webContents.send("tunnel-url", publicUrl);
         });
       }
     });
 
-    // Swallow stderr noise from SSH (host-key warnings etc.)
-    ssh.stderr.on("data", () => {});
+    // Filter SSH stderr: suppress known-benign host-key warnings, log real errors.
+    ssh.stderr.on("data", (data) => {
+      const msg = data.toString().trim();
+      if (!msg.includes("Warning: Permanently added") && !msg.includes("LocalForward")) {
+        console.error(`[main:ssh] ${msg}`);
+      }
+    });
 
     ssh.on("error", (err) => {
       console.error("[main] SSH process failed to start:", err.message);

@@ -12,25 +12,18 @@ import { DiskWriter } from "./diskWriter";
 import ConnectionScreen from "./components/ConnectionScreen";
 import TransferScreen   from "./components/TransferScreen";
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-const STUN_SERVERS = {
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-    { urls: "stun:stun2.l.google.com:19302" },
-    // Free TURN servers so cross-NAT connections work when one peer is on
-    // a remote network (e.g. receiver opening the SSH tunnel URL).
-    {
-      urls: [
-        "turn:openrelay.metered.ca:80",
-        "turn:openrelay.metered.ca:443",
-        "turn:openrelay.metered.ca:443?transport=tcp",
-      ],
-      username: "openrelayproject",
-      credential: "openrelayproject",
-    },
-  ],
-};
+// ICE config is fetched from the server at connect time so TURN credentials
+// are never baked into the client bundle and can be rotated via env vars.
+async function fetchIceConfig() {
+  try {
+    const res = await fetch("/api/ice-config");
+    if (!res.ok) throw new Error("ice-config fetch failed");
+    return await res.json();
+  } catch {
+    // Fallback to STUN-only if the server endpoint is unreachable
+    return { iceServers: [{ urls: "stun:stun.l.google.com:19302" }] };
+  }
+}
 
 const CHUNK_SIZE        = 64 * 1024;         // 64 KB plaintext
 const BUFFER_THRESHOLD  = 4 * 1024 * 1024;  // 4 MB back-pressure threshold
@@ -43,8 +36,6 @@ function getKeyFromHash() {
 }
 
 function setKeyInHash(b64Key) {
-  const params = new URLSearchParams(window.location.search);
-  const roomId = params.get("room") || "";
   window.location.hash = `key=${b64Key}`;
 }
 
@@ -197,7 +188,7 @@ export default function App() {
     async function onOffer({ offer }) {
       addLog("Offer received from sender", "info");
       try {
-        const pc = getPeerConnection();
+        const pc = await getPeerConnection();
         await pc.setRemoteDescription(new RTCSessionDescription(offer));
         
         for (const candidate of pendingCandidatesRef.current) {
@@ -330,11 +321,12 @@ export default function App() {
   }
 
   // ── RTCPeerConnection factory ──
-  function getPeerConnection() {
+  async function getPeerConnection() {
     if (pcRef.current) return pcRef.current;
 
-    const pc     = new RTCPeerConnection(STUN_SERVERS);
-    pcRef.current = pc;
+    const iceConfig = await fetchIceConfig();
+    const pc        = new RTCPeerConnection(iceConfig);
+    pcRef.current   = pc;
 
     pc.onicecandidate = ({ candidate }) => {
       if (candidate) {
@@ -398,7 +390,7 @@ export default function App() {
   // ── Sender: create offer + data channel ──
   async function initiateOffer() {
     try {
-      const pc = getPeerConnection();
+      const pc = await getPeerConnection();
       const dc = pc.createDataChannel("file-transfer", { ordered: true });
       dcRef.current = dc;
       setupSenderChannel(dc);
@@ -683,8 +675,6 @@ export default function App() {
     startSpeedMeter();
     setTransferState(p => ({ ...p, phase: "sending" }));
 
-    let chunksSentThisSession = 0;
-
     for (let i = 0; i < totalChunks; i++) {
       // 1. Check if paused
       while (isPausedRef.current) {
@@ -791,7 +781,7 @@ export default function App() {
     // Sender will receive this and call initiateOffer()
     // Receiver will just recreate the peer connection
     if (roleRef.current === "receiver") {
-      getPeerConnection();
+      await getPeerConnection();
     }
   }
 
@@ -843,8 +833,8 @@ export default function App() {
         addLog("Encryption key generated and embedded in share URL 🔒", "ok");
       }
 
-      // Pre-create peer connection
-      getPeerConnection();
+      // Pre-create peer connection (async: fetches ICE config from server)
+      await getPeerConnection();
       
       if (resp.peerCount === 2) {
         setPeerConnected(true);

@@ -14,7 +14,6 @@ UPDATE 5 -- hosted on Vercel for frontend CDN and Railway for backend. Added thi
 
 UPDATE 6 -- Implemented rate limiting, input sanitation, session and secrets management, dependency scanning & Vulnerability Patching. audit logging and security headers.
 
-Deployment Link --  [https://p2-p-file-transfer-ecru.vercel.app/](https://p2-p-file-transfer-ecru.vercel.app/)
 
 ## Project Structure
 
